@@ -267,7 +267,7 @@ async def admin_update_watch(
 @app.post("/admin/watches/{watch_id}/delete", response_class=HTMLResponse)
 async def admin_delete_watch(
     watch_id: int,
-    session: AsyncSession = Depends(session_dependency()),
+    session: AsyncSession = Depends(get_session),
 ) -> RedirectResponse:
     result = await session.execute(select(Watchlist).where(Watchlist.id == watch_id))
     model = result.scalar_one_or_none()
