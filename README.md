@@ -76,6 +76,12 @@ psql $DATABASE_URL -f migrations/001_init.sql
 
 See `src/api/main.py` for request/response schemas.
 
+### Admin Panel
+
+Visit `http://localhost:8000/admin/watches` for a lightweight HTML dashboard backed by the same FastAPI service. The page lists
+all watchlist entries, provides an inline form for creating new entries, and offers update/delete controls for existing watches
+without needing to craft raw JSON requests.
+
 ## Development
 
 Install dependencies and run tests locally:

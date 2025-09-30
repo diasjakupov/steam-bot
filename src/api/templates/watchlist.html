@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>CS2 Market Watcher — Admin</title>
+    <style>
+      body {
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        margin: 2rem auto;
+        max-width: 960px;
+        line-height: 1.5;
+      }
+
+      h1,
+      h2 {
+        margin-bottom: 0.25rem;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 1rem;
+      }
+
+      th,
+      td {
+        border: 1px solid #d0d7de;
+        padding: 0.5rem;
+        vertical-align: top;
+      }
+
+      th {
+        background-color: #f6f8fa;
+        text-align: left;
+      }
+
+      form {
+        margin: 0;
+      }
+
+      input,
+      textarea,
+      select,
+      button {
+        font: inherit;
+        padding: 0.35rem 0.5rem;
+        margin: 0.15rem 0;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+      }
+
+      .status {
+        margin: 1rem 0;
+        padding: 0.75rem;
+        border-radius: 4px;
+        background-color: #ecfdf3;
+        border: 1px solid #4ade80;
+        color: #14532d;
+      }
+
+      .actions {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+      }
+
+      .danger {
+        background-color: #fee2e2;
+        border: 1px solid #f87171;
+        color: #991b1b;
+      }
+
+      .danger button {
+        background-color: transparent;
+        border: none;
+        color: inherit;
+        cursor: pointer;
+        padding: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>CS2 Market Watcher Admin</h1>
+    <p>Manage watchlist entries via a simple web interface.</p>
+
+    {% if status_message %}
+    <div class="status">{{ status_message }}</div>
+    {% endif %}
+
+    <section>
+      <h2>Add a new watch</h2>
+      <form method="post" action="/admin/watches">
+        <div class="layout">
+          <label>
+            AppID
+            <input type="number" name="appid" required />
+          </label>
+          <label>
+            Market Hash Name
+            <input type="text" name="market_hash_name" required />
+          </label>
+          <label>
+            Listing URL
+            <input type="url" name="url" required />
+          </label>
+          <label>
+            Currency ID
+            <input type="number" name="currency_id" value="{{ default_currency }}" />
+          </label>
+          <label>
+            Float min
+            <input type="number" step="any" name="float_min" />
+          </label>
+          <label>
+            Float max
+            <input type="number" step="any" name="float_max" />
+          </label>
+          <label>
+            Seed whitelist (comma separated)
+            <input type="text" name="seed_whitelist" placeholder="123, 456" />
+          </label>
+          <label>
+            Sticker contains (comma or newline separated)
+            <textarea name="sticker_any" rows="2" placeholder="Crown (Foil)"></textarea>
+          </label>
+          <label>
+            Target resale USD
+            <input type="number" step="any" name="target_resale_usd" required />
+          </label>
+          <label>
+            Minimum profit USD
+            <input type="number" step="any" name="min_profit_usd" required />
+          </label>
+        </div>
+        <button type="submit">Add watch</button>
+      </form>
+    </section>
+
+    <section>
+      <h2>Existing watches</h2>
+      {% if watches %}
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Metadata</th>
+            <th>Rules</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for watch in watches %}
+          <tr>
+            <td>{{ watch.id }}</td>
+            <td>
+              <strong>{{ watch.market_hash_name }}</strong><br />
+              AppID: {{ watch.appid }}<br />
+              Currency: {{ watch.currency_id }}<br />
+              <a href="{{ watch.url }}" target="_blank" rel="noopener">Listing page</a>
+            </td>
+            <td>
+              <form method="post" action="/admin/watches/{{ watch.id }}">
+                <div class="layout">
+                  <label>
+                    AppID
+                    <input type="number" name="appid" value="{{ watch.appid }}" required />
+                  </label>
+                  <label>
+                    Market Hash Name
+                    <input type="text" name="market_hash_name" value="{{ watch.market_hash_name }}" required />
+                  </label>
+                  <label>
+                    Listing URL
+                    <input type="url" name="url" value="{{ watch.url }}" required />
+                  </label>
+                  <label>
+                    Currency ID
+                    <input type="number" name="currency_id" value="{{ watch.currency_id }}" />
+                  </label>
+                  <label>
+                    Float min
+                    <input
+                      type="number"
+                      step="any"
+                      name="float_min"
+                      value="{{ watch.rules.float_min if watch.rules.float_min is not none else '' }}"
+                    />
+                  </label>
+                  <label>
+                    Float max
+                    <input
+                      type="number"
+                      step="any"
+                      name="float_max"
+                      value="{{ watch.rules.float_max if watch.rules.float_max is not none else '' }}"
+                    />
+                  </label>
+                  <label>
+                    Seed whitelist
+                    <input
+                      type="text"
+                      name="seed_whitelist"
+                      value="{{ (watch.rules.seed_whitelist or []) | join(', ') }}"
+                    />
+                  </label>
+                  <label>
+                    Sticker contains
+                    <textarea name="sticker_any" rows="2">{{ (watch.rules.sticker_any or []) | join('\n') }}</textarea>
+                  </label>
+                  <label>
+                    Target resale USD
+                    <input type="number" step="any" name="target_resale_usd" value="{{ watch.rules.target_resale_usd }}" required />
+                  </label>
+                  <label>
+                    Minimum profit USD
+                    <input type="number" step="any" name="min_profit_usd" value="{{ watch.rules.min_profit_usd }}" required />
+                  </label>
+                </div>
+                <div class="actions">
+                  <button type="submit">Update</button>
+                </div>
+              </form>
+            </td>
+            <td>
+              <form method="post" action="/admin/watches/{{ watch.id }}/delete" class="danger" onsubmit="return confirm('Delete watch {{ watch.market_hash_name }}?');">
+                <button type="submit">Delete</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p>No watches saved yet.</p>
+      {% endif %}
+    </section>
+  </body>
+</html>
