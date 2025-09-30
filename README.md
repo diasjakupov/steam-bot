@@ -59,7 +59,15 @@ COMBINED_FEE_MIN_CENTS=1
 docker compose up --build
 ```
 
-This command starts Postgres, Redis, the CSFloat Inspect container, the FastAPI control API, and the worker process. The API is exposed on port 8000.
+This command starts Postgres, Redis, a manually-provisioned CSFloat Inspect container, the FastAPI control API, and the worker process. The API is exposed on port 8000.
+
+> **Inspect configuration**
+>
+> 1. Copy `inspect/config.example.js` to `inspect/config.js`.
+> 2. Fill in at least one Steam bot account (account name, password, and optional Steam Guard secrets) plus any Inspect tuning you require. The container will refuse to start without this file.
+> 3. If you enable Inspect's Postgres cache, make sure the referenced database is reachable from the container.
+
+The Inspect service image is built from the upstream repository during `docker compose build`, matching the manual setup instructions (Node.js v14+ with `npm install` followed by `node index.js`).
 
 ### Database Migrations
 
@@ -95,7 +103,7 @@ pytest
 
 ## References
 
-- CSFloat Inspect deployment guidance (Node.js requirements, Postgres caching, multi-account support). [GitHub](https://github.com/CSSFloat/Inspect)
+- CSFloat Inspect deployment guidance (Node.js requirements, Postgres caching, multi-account support). [GitHub](https://github.com/Step7750/CSGOFloat)
 - CSFloat API response fields. [CSFloat Docs](https://docs.csfloat.com/)
 - Steam Community Market priceoverview usage. [Stack Overflow](https://stackoverflow.com/questions/18921471/steam-market-price-history-json)
 - Steam Community Market render endpoint details. [Steam Community](https://steamcommunity.com/)
