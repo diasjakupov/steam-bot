@@ -1,6 +1,6 @@
 module.exports = {
   // Provide one or more Steam bot accounts used by CSFloat Inspect.
-  accounts: [
+  logins: [
     {
       accountName: "steam_bot_username",
       password: "steam_bot_password",

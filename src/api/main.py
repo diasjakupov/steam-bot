@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from typing import Any, List
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
+from fastapi import Depends, FastAPI, Form, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
@@ -87,13 +87,16 @@ async def create_watch(
     return WatchResponse.from_model(model)
 
 
-@app.delete("/watch/{watch_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_watch(watch_id: int, session: AsyncSession = Depends(session_dependency())) -> None:
+@app.delete("/watch/{watch_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
+async def delete_watch(
+    watch_id: int, session: AsyncSession = Depends(session_dependency())
+) -> Response:
     result = await session.execute(select(Watchlist).where(Watchlist.id == watch_id))
     model = result.scalar_one_or_none()
     if model is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
     await session.delete(model)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 STATUS_MESSAGES = {

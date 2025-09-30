@@ -65,7 +65,7 @@ This command starts Postgres, Redis, a manually-provisioned CSFloat Inspect cont
 >
 > 1. Copy `inspect/config.example.js` to `inspect/config.js`.
 > 2. Install dependencies in the `inspect/` directory with `npm install csgofloat` (this happens automatically during `docker compose build`, but you can run it manually for local testing).
-> 3. Fill in at least one Steam bot account (account name, password, and optional Steam Guard secrets) plus any Inspect tuning you require. The container will refuse to start without this file.
+> 3. Fill in at least one Steam bot account inside the `logins` array (account name, password, and optional Steam Guard secrets) plus any Inspect tuning you require. The container will refuse to start without this file.
 > 4. If you enable Inspect's Postgres cache, make sure the referenced database is reachable from the container.
 > 5. After the container boots, visit the Inspect API host in your browser to complete the initial Steam Guard login for each bot as described in the upstream docs.
 

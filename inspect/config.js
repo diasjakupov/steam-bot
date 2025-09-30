@@ -1,7 +1,7 @@
 module.exports = {
   // Populate this array with at least one Steam account configuration.
   // See inspect/config.example.js for the expected shape.
-  accounts: [],
+  logins: [],
   api: {
     port: 5000,
     host: "0.0.0.0"
