@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, Callable
+from typing import AsyncIterator
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
@@ -42,13 +42,9 @@ async def session_scope() -> AsyncIterator[AsyncSession]:
         await session.close()
 
 
-def session_dependency() -> Callable[[], AsyncIterator[AsyncSession]]:
-    @asynccontextmanager
-    async def _dependency() -> AsyncIterator[AsyncSession]:
-        async with session_scope() as session:
-            yield session
-
-    return _dependency
+async def get_session() -> AsyncIterator[AsyncSession]:
+    async with session_scope() as session:
+        yield session
 
 
 async def init_models() -> None:

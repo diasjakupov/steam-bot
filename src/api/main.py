@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import get_settings
-from ..core.db import init_models, session_dependency
+from ..core.db import get_session, init_models
 from ..core.models import Watchlist
 
 app = FastAPI(title="CS2 Market Watcher")
@@ -68,7 +68,7 @@ async def health() -> dict[str, str]:
 
 
 @app.get("/watch", response_model=list[WatchResponse])
-async def list_watchlist(session: AsyncSession = Depends(session_dependency())) -> list[WatchResponse]:
+async def list_watchlist(session: AsyncSession = Depends(get_session)) -> list[WatchResponse]:
     result = await session.execute(select(Watchlist))
     rows = result.scalars().all()
     return [WatchResponse.from_model(row) for row in rows]
@@ -77,7 +77,7 @@ async def list_watchlist(session: AsyncSession = Depends(session_dependency())) 
 @app.post("/watch", response_model=WatchResponse, status_code=status.HTTP_201_CREATED)
 async def create_watch(
     payload: WatchRequest,
-    session: AsyncSession = Depends(session_dependency()),
+    session: AsyncSession = Depends(get_session),
 ) -> WatchResponse:
     model = Watchlist(
         appid=payload.appid,
@@ -94,7 +94,7 @@ async def create_watch(
 
 @app.delete("/watch/{watch_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
 async def delete_watch(
-    watch_id: int, session: AsyncSession = Depends(session_dependency())
+    watch_id: int, session: AsyncSession = Depends(get_session)
 ) -> Response:
     result = await session.execute(select(Watchlist).where(Watchlist.id == watch_id))
     model = result.scalar_one_or_none()
@@ -168,7 +168,7 @@ async def admin_root() -> RedirectResponse:
 @app.get("/admin/watches", response_class=HTMLResponse)
 async def admin_watchlist(
     request: Request,
-    session: AsyncSession = Depends(session_dependency()),
+    session: AsyncSession = Depends(get_session),
 ) -> HTMLResponse:
     result = await session.execute(select(Watchlist).order_by(Watchlist.id))
     rows = result.scalars().all()
@@ -199,7 +199,7 @@ async def admin_create_watch(
     sticker_any: str | None = Form(None),
     target_resale_usd: str = Form(...),
     min_profit_usd: str = Form(...),
-    session: AsyncSession = Depends(session_dependency()),
+    session: AsyncSession = Depends(get_session),
 ) -> RedirectResponse:
     try:
         rules = _build_rule_config(
@@ -237,7 +237,7 @@ async def admin_update_watch(
     sticker_any: str | None = Form(None),
     target_resale_usd: str = Form(...),
     min_profit_usd: str = Form(...),
-    session: AsyncSession = Depends(session_dependency()),
+    session: AsyncSession = Depends(get_session),
 ) -> RedirectResponse:
     result = await session.execute(select(Watchlist).where(Watchlist.id == watch_id))
     model = result.scalar_one_or_none()
