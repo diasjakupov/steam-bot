@@ -1,0 +1,61 @@
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: steam
+      POSTGRES_PASSWORD: steam
+      POSTGRES_DB: steam
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+  redis:
+    image: redis:7
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+  inspect:
+    image: step7750/csgofloat:master
+    environment:
+      - PORT=5000
+    ports:
+      - "5000:5000"
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://steam:steam@postgres/steam
+      REDIS_URL: redis://redis:6379/0
+      STEAM_CURRENCY_ID: 1
+      INSPECT_BASE_URL: http://inspect:5000
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      POLL_INTERVAL_S: 10
+      INSPECT_RPS_PER_ACCOUNT: 0.8
+      INSPECT_ACCOUNTS: 5
+      COMBINED_FEE_RATE: 0.15
+      COMBINED_FEE_MIN_CENTS: 1
+    command: ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
+      - inspect
+  worker:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://steam:steam@postgres/steam
+      REDIS_URL: redis://redis:6379/0
+      STEAM_CURRENCY_ID: 1
+      INSPECT_BASE_URL: http://inspect:5000
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      POLL_INTERVAL_S: 10
+      INSPECT_RPS_PER_ACCOUNT: 0.8
+      INSPECT_ACCOUNTS: 5
+      COMBINED_FEE_RATE: 0.15
+      COMBINED_FEE_MIN_CENTS: 1
+    command: ["python", "-m", "src.worker.main"]
+    depends_on:
+      - postgres
+      - redis
+      - inspect
+
+volumes:
+  postgres-data:
