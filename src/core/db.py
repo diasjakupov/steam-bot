@@ -6,6 +6,7 @@ from typing import AsyncIterator, Callable
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from .config import get_settings
+from .models import Base
 
 _engine: AsyncEngine | None = None
 _SessionLocal: async_sessionmaker[AsyncSession] | None = None
@@ -48,4 +49,10 @@ def session_dependency() -> Callable[[], AsyncIterator[AsyncSession]]:
             yield session
 
     return _dependency
+
+
+async def init_models() -> None:
+    engine = get_engine()
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 

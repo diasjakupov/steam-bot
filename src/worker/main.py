@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import get_settings
-from ..core.db import get_sessionmaker
+from ..core.db import get_sessionmaker, init_models
 from ..core.models import Alert, ListingSnapshot, Watchlist
 from ..core.profit import ProfitInputs, is_profitable
 from ..core.rate_limit import build_bucket
@@ -146,8 +146,13 @@ async def worker_loop() -> None:
         await redis.aclose()
 
 
+async def _bootstrap() -> None:
+    await init_models()
+    await worker_loop()
+
+
 def main() -> None:
-    asyncio.run(worker_loop())
+    asyncio.run(_bootstrap())
 
 
 if __name__ == "__main__":

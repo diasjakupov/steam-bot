@@ -12,11 +12,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import get_settings
-from ..core.db import session_dependency
+from ..core.db import init_models, session_dependency
 from ..core.models import Watchlist
 
 app = FastAPI(title="CS2 Market Watcher")
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+
+@app.on_event("startup")
+async def _startup() -> None:
+    await init_models()
 
 
 class RuleConfig(BaseModel):
