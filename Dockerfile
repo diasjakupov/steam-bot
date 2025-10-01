@@ -10,6 +10,10 @@ RUN apt-get update && apt-get install -y build-essential && rm -rf /var/lib/apt/
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Install the Playwright-managed Chromium browser ahead of time so the
+# application can launch it without downloading at runtime.
+RUN python -m playwright install --with-deps chromium
+
 COPY . .
 
 CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
