@@ -1,4 +1,6 @@
-from src.api.main import parse_int_list, parse_optional_float, parse_str_list
+import pytest
+
+from src.api.main import extract_listing_details, parse_int_list, parse_optional_float, parse_str_list
 
 
 def test_parse_optional_float_handles_empty_values():
@@ -33,3 +35,23 @@ def test_parse_str_list_splits_on_commas_and_newlines():
     assert parse_str_list("a,b") == ["a", "b"]
     assert parse_str_list("Sticker One\nSticker Two") == ["Sticker One", "Sticker Two"]
     assert parse_str_list("Sticker One,\nSticker Two") == ["Sticker One", "Sticker Two"]
+
+
+def test_extract_listing_details_parses_standard_url():
+    url = "https://steamcommunity.com/market/listings/730/AK-47%20%7C%20Redline%20%28Field-Tested%29"
+    appid, market_hash_name = extract_listing_details(url)
+    assert appid == 730
+    assert market_hash_name == "AK-47 | Redline (Field-Tested)"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://example.com/market/listings/730/foo",
+        "https://steamcommunity.com/market/730/foo",
+        "https://steamcommunity.com/market/listings/not-an-id/foo",
+    ],
+)
+def test_extract_listing_details_rejects_invalid_urls(url: str) -> None:
+    with pytest.raises(ValueError):
+        extract_listing_details(url)

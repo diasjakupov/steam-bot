@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from typing import Any, List
+from urllib.parse import unquote, urlparse
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -141,23 +142,19 @@ def parse_str_list(value: str | None) -> list[str] | None:
     return parts or None
 
 
-def _build_rule_config(
-    *,
-    float_min: str | None,
-    float_max: str | None,
-    seed_whitelist: str | None,
-    sticker_any: str | None,
-    target_resale_usd: str,
-    min_profit_usd: str,
-) -> RuleConfig:
-    return RuleConfig(
-        float_min=parse_optional_float(float_min),
-        float_max=parse_optional_float(float_max),
-        seed_whitelist=parse_int_list(seed_whitelist),
-        sticker_any=parse_str_list(sticker_any),
-        target_resale_usd=float(target_resale_usd),
-        min_profit_usd=float(min_profit_usd),
-    )
+def extract_listing_details(url: str) -> tuple[int, str]:
+    parsed = urlparse(url)
+    parts = [segment for segment in parsed.path.split("/") if segment]
+    if len(parts) < 4 or parts[0] != "market" or parts[1] != "listings":
+        raise ValueError("Unsupported listing URL format")
+    try:
+        appid = int(parts[2])
+    except ValueError as exc:
+        raise ValueError("AppID segment must be numeric") from exc
+    market_hash_name = unquote("/".join(parts[3:]))
+    if not market_hash_name:
+        raise ValueError("Missing market hash name segment")
+    return appid, market_hash_name
 
 
 @app.get("/admin", response_class=HTMLResponse)
@@ -183,32 +180,29 @@ async def admin_watchlist(
             "watches": watches,
             "status_message": message,
             "default_currency": settings.steam_currency_id,
+            "default_min_profit": settings.admin_default_min_profit_usd,
         },
     )
 
 
 @app.post("/admin/watches", response_class=HTMLResponse)
 async def admin_create_watch(
-    appid: int = Form(...),
-    market_hash_name: str = Form(...),
     url: str = Form(...),
-    currency_id: int = Form(1),
     float_min: str | None = Form(None),
     float_max: str | None = Form(None),
-    seed_whitelist: str | None = Form(None),
-    sticker_any: str | None = Form(None),
     target_resale_usd: str = Form(...),
-    min_profit_usd: str = Form(...),
     session: AsyncSession = Depends(get_session),
 ) -> RedirectResponse:
+    settings = get_settings()
     try:
-        rules = _build_rule_config(
-            float_min=float_min,
-            float_max=float_max,
-            seed_whitelist=seed_whitelist,
-            sticker_any=sticker_any,
-            target_resale_usd=target_resale_usd,
-            min_profit_usd=min_profit_usd,
+        appid, market_hash_name = extract_listing_details(url)
+        rules = RuleConfig(
+            float_min=parse_optional_float(float_min),
+            float_max=parse_optional_float(float_max),
+            seed_whitelist=None,
+            sticker_any=None,
+            target_resale_usd=float(target_resale_usd),
+            min_profit_usd=settings.admin_default_min_profit_usd,
         )
     except Exception:
         return RedirectResponse(url="/admin/watches?status=error", status_code=status.HTTP_303_SEE_OTHER)
@@ -217,7 +211,7 @@ async def admin_create_watch(
         appid=appid,
         market_hash_name=market_hash_name,
         url=url,
-        currency_id=currency_id,
+        currency_id=settings.steam_currency_id,
         rules=rules.model_dump(),
     )
     session.add(model)
@@ -227,16 +221,10 @@ async def admin_create_watch(
 @app.post("/admin/watches/{watch_id}", response_class=HTMLResponse)
 async def admin_update_watch(
     watch_id: int,
-    appid: int = Form(...),
-    market_hash_name: str = Form(...),
     url: str = Form(...),
-    currency_id: int = Form(1),
     float_min: str | None = Form(None),
     float_max: str | None = Form(None),
-    seed_whitelist: str | None = Form(None),
-    sticker_any: str | None = Form(None),
     target_resale_usd: str = Form(...),
-    min_profit_usd: str = Form(...),
     session: AsyncSession = Depends(get_session),
 ) -> RedirectResponse:
     result = await session.execute(select(Watchlist).where(Watchlist.id == watch_id))
@@ -244,14 +232,20 @@ async def admin_update_watch(
     if model is None:
         return RedirectResponse(url="/admin/watches?status=not_found", status_code=status.HTTP_303_SEE_OTHER)
 
+    settings = get_settings()
+    existing_rules = model.rules or {}
     try:
-        rules = _build_rule_config(
-            float_min=float_min,
-            float_max=float_max,
-            seed_whitelist=seed_whitelist,
-            sticker_any=sticker_any,
-            target_resale_usd=target_resale_usd,
-            min_profit_usd=min_profit_usd,
+        appid, market_hash_name = extract_listing_details(url)
+        min_profit_value = existing_rules.get("min_profit_usd", settings.admin_default_min_profit_usd)
+        if min_profit_value is None:
+            min_profit_value = settings.admin_default_min_profit_usd
+        rules = RuleConfig(
+            float_min=parse_optional_float(float_min),
+            float_max=parse_optional_float(float_max),
+            seed_whitelist=existing_rules.get("seed_whitelist"),
+            sticker_any=existing_rules.get("sticker_any"),
+            target_resale_usd=float(target_resale_usd),
+            min_profit_usd=float(min_profit_value),
         )
     except Exception:
         return RedirectResponse(url="/admin/watches?status=error", status_code=status.HTTP_303_SEE_OTHER)
@@ -259,7 +253,6 @@ async def admin_update_watch(
     model.appid = appid
     model.market_hash_name = market_hash_name
     model.url = url
-    model.currency_id = currency_id
     model.rules = rules.model_dump()
     return RedirectResponse(url="/admin/watches?status=updated", status_code=status.HTTP_303_SEE_OTHER)
 

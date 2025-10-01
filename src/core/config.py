@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     inspect_accounts: int = Field(default=1, alias="INSPECT_ACCOUNTS")
     combined_fee_rate: float = Field(default=0.15, alias="COMBINED_FEE_RATE")
     combined_fee_min_cents: int = Field(default=1, alias="COMBINED_FEE_MIN_CENTS")
+    admin_default_min_profit_usd: float = Field(default=0.0, alias="ADMIN_DEFAULT_MIN_PROFIT_USD")
 
     class Config:
         env_file = ".env"

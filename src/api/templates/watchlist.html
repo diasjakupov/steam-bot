@@ -4,239 +4,307 @@
     <meta charset="utf-8" />
     <title>CS2 Market Watcher — Admin</title>
     <style>
+      :root {
+        color-scheme: light dark;
+      }
+
       body {
         font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        margin: 2rem auto;
-        max-width: 960px;
-        line-height: 1.5;
+        margin: 0;
+        padding: 2.5rem 1.5rem 4rem;
+        background: radial-gradient(circle at top, #eef2ff, #f8fafc 55%);
+        min-height: 100vh;
+        color: #0f172a;
       }
 
-      h1,
+      h1 {
+        font-size: 2.25rem;
+        margin-bottom: 0.5rem;
+        text-align: center;
+      }
+
       h2 {
-        margin-bottom: 0.25rem;
+        margin-bottom: 0.5rem;
+        font-size: 1.35rem;
       }
 
-      table {
-        width: 100%;
-        border-collapse: collapse;
-        margin-top: 1rem;
+      p.lead {
+        max-width: 720px;
+        margin: 0 auto 2rem;
+        text-align: center;
+        color: #475569;
       }
 
-      th,
-      td {
-        border: 1px solid #d0d7de;
-        padding: 0.5rem;
-        vertical-align: top;
+      .container {
+        max-width: 900px;
+        margin: 0 auto;
+        display: flex;
+        flex-direction: column;
+        gap: 1.5rem;
       }
 
-      th {
-        background-color: #f6f8fa;
-        text-align: left;
+      .card {
+        background: rgba(255, 255, 255, 0.92);
+        backdrop-filter: blur(8px);
+        border-radius: 18px;
+        padding: 1.5rem;
+        box-shadow: 0 20px 45px -24px rgba(15, 23, 42, 0.45);
+        border: 1px solid rgba(99, 102, 241, 0.1);
       }
 
       form {
-        margin: 0;
-      }
-
-      input,
-      textarea,
-      select,
-      button {
-        font: inherit;
-        padding: 0.35rem 0.5rem;
-        margin: 0.15rem 0;
-      }
-
-      .layout {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
+        display: flex;
+        flex-direction: column;
         gap: 1rem;
       }
 
-      .status {
-        margin: 1rem 0;
-        padding: 0.75rem;
-        border-radius: 4px;
-        background-color: #ecfdf3;
-        border: 1px solid #4ade80;
-        color: #14532d;
-      }
-
-      .actions {
+      label {
         display: flex;
-        gap: 0.5rem;
-        flex-wrap: wrap;
+        flex-direction: column;
+        font-weight: 600;
+        font-size: 0.9rem;
+        color: #1e293b;
+        gap: 0.35rem;
       }
 
-      .danger {
-        background-color: #fee2e2;
-        border: 1px solid #f87171;
-        color: #991b1b;
+      input {
+        font: inherit;
+        padding: 0.6rem 0.75rem;
+        border-radius: 12px;
+        border: 1px solid rgba(148, 163, 184, 0.7);
+        background-color: rgba(255, 255, 255, 0.9);
+        transition: border-color 0.2s ease, box-shadow 0.2s ease;
       }
 
-      .danger button {
-        background-color: transparent;
+      input:focus {
+        outline: none;
+        border-color: #6366f1;
+        box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);
+      }
+
+      button {
+        align-self: flex-start;
         border: none;
-        color: inherit;
+        border-radius: 999px;
+        padding: 0.6rem 1.4rem;
+        font-weight: 600;
         cursor: pointer;
-        padding: 0;
+        background: linear-gradient(135deg, #4f46e5, #6366f1);
+        color: white;
+        transition: transform 0.15s ease, box-shadow 0.2s ease;
+      }
+
+      button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 10px 30px -15px rgba(79, 70, 229, 0.7);
+      }
+
+      .secondary {
+        background: transparent;
+        color: #ef4444;
+        border: 1px solid rgba(248, 113, 113, 0.6);
+      }
+
+      .secondary:hover {
+        color: white;
+        background: linear-gradient(135deg, #ef4444, #f97316);
+        border-color: transparent;
+        box-shadow: 0 10px 30px -15px rgba(239, 68, 68, 0.7);
+      }
+
+      .status {
+        padding: 0.85rem 1.1rem;
+        border-radius: 14px;
+        background: rgba(34, 197, 94, 0.1);
+        border: 1px solid rgba(34, 197, 94, 0.4);
+        color: #166534;
+      }
+
+      .grid {
+        display: grid;
+        gap: 1rem;
+      }
+
+      .grid.columns-3 {
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      }
+
+      .hint {
+        font-size: 0.85rem;
+        color: #64748b;
+        margin-top: -0.25rem;
+      }
+
+      .watch-card {
+        gap: 1.25rem;
+      }
+
+      .watch-header {
+        display: flex;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        align-items: baseline;
+      }
+
+      .watch-meta {
+        font-size: 0.85rem;
+        color: #475569;
+      }
+
+      a {
+        color: #4f46e5;
+        text-decoration: none;
+      }
+
+      a:hover {
+        text-decoration: underline;
+      }
+
+      @media (max-width: 640px) {
+        body {
+          padding: 1.75rem 1.1rem 3rem;
+        }
+
+        h1 {
+          font-size: 1.75rem;
+        }
+
+        .card {
+          padding: 1.25rem;
+        }
       }
     </style>
   </head>
   <body>
-    <h1>CS2 Market Watcher Admin</h1>
-    <p>Manage watchlist entries via a simple web interface.</p>
+    <div class="container">
+      <h1>CS2 Market Watcher Admin</h1>
+      <p class="lead">
+        Paste the Steam listing URL, optional float range, and your target resale price to add an item to the watchlist.
+        Watches use Steam currency ID {{ default_currency }} and a default minimum profit of
+        ${{ "%.2f" | format(default_min_profit) }}.
+      </p>
 
-    {% if status_message %}
-    <div class="status">{{ status_message }}</div>
-    {% endif %}
+      {% if status_message %}
+      <div class="status">{{ status_message }}</div>
+      {% endif %}
 
-    <section>
-      <h2>Add a new watch</h2>
-      <form method="post" action="/admin/watches">
-        <div class="layout">
-          <label>
-            AppID
-            <input type="number" name="appid" required />
-          </label>
-          <label>
-            Market Hash Name
-            <input type="text" name="market_hash_name" required />
-          </label>
+      <section class="card">
+        <h2>Add a new watch</h2>
+        <form method="post" action="/admin/watches">
           <label>
             Listing URL
-            <input type="url" name="url" required />
+            <input type="url" name="url" placeholder="https://steamcommunity.com/market/listings/..." required />
           </label>
-          <label>
-            Currency ID
-            <input type="number" name="currency_id" value="{{ default_currency }}" />
-          </label>
-          <label>
-            Float min
-            <input type="number" step="any" name="float_min" />
-          </label>
-          <label>
-            Float max
-            <input type="number" step="any" name="float_max" />
-          </label>
-          <label>
-            Seed whitelist (comma separated)
-            <input type="text" name="seed_whitelist" placeholder="123, 456" />
-          </label>
-          <label>
-            Sticker contains (comma or newline separated)
-            <textarea name="sticker_any" rows="2" placeholder="Crown (Foil)"></textarea>
-          </label>
-          <label>
-            Target resale USD
-            <input type="number" step="any" name="target_resale_usd" required />
-          </label>
-          <label>
-            Minimum profit USD
-            <input type="number" step="any" name="min_profit_usd" required />
-          </label>
-        </div>
-        <button type="submit">Add watch</button>
-      </form>
-    </section>
+          <div class="grid columns-3">
+            <label>
+              Float min
+              <input type="number" step="0.0001" min="0" max="1" name="float_min" placeholder="0.00" />
+            </label>
+            <label>
+              Float max
+              <input type="number" step="0.0001" min="0" max="1" name="float_max" placeholder="0.15" />
+            </label>
+            <label>
+              Target resale price (USD)
+              <input type="number" step="0.01" min="0" name="target_resale_usd" placeholder="200.00" required />
+            </label>
+          </div>
+          <p class="hint">Min profit defaults to ${{ "%.2f" | format(default_min_profit) }} for alerts.</p>
+          <button type="submit">Add watch</button>
+        </form>
+      </section>
 
-    <section>
-      <h2>Existing watches</h2>
-      {% if watches %}
-      <table>
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>Metadata</th>
-            <th>Rules</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
+      <section>
+        <h2>Existing watches</h2>
+        {% if watches %}
+        <div class="grid" style="gap: 1.25rem;">
           {% for watch in watches %}
-          <tr>
-            <td>{{ watch.id }}</td>
-            <td>
-              <strong>{{ watch.market_hash_name }}</strong><br />
-              AppID: {{ watch.appid }}<br />
-              Currency: {{ watch.currency_id }}<br />
-              <a href="{{ watch.url }}" target="_blank" rel="noopener">Listing page</a>
-            </td>
-            <td>
-              <form method="post" action="/admin/watches/{{ watch.id }}">
-                <div class="layout">
-                  <label>
-                    AppID
-                    <input type="number" name="appid" value="{{ watch.appid }}" required />
-                  </label>
-                  <label>
-                    Market Hash Name
-                    <input type="text" name="market_hash_name" value="{{ watch.market_hash_name }}" required />
-                  </label>
-                  <label>
-                    Listing URL
-                    <input type="url" name="url" value="{{ watch.url }}" required />
-                  </label>
-                  <label>
-                    Currency ID
-                    <input type="number" name="currency_id" value="{{ watch.currency_id }}" />
-                  </label>
-                  <label>
-                    Float min
-                    <input
-                      type="number"
-                      step="any"
-                      name="float_min"
-                      value="{{ watch.rules.float_min if watch.rules.float_min is not none else '' }}"
-                    />
-                  </label>
-                  <label>
-                    Float max
-                    <input
-                      type="number"
-                      step="any"
-                      name="float_max"
-                      value="{{ watch.rules.float_max if watch.rules.float_max is not none else '' }}"
-                    />
-                  </label>
-                  <label>
-                    Seed whitelist
-                    <input
-                      type="text"
-                      name="seed_whitelist"
-                      value="{{ (watch.rules.seed_whitelist or []) | join(', ') }}"
-                    />
-                  </label>
-                  <label>
-                    Sticker contains
-                    <textarea name="sticker_any" rows="2">{{ (watch.rules.sticker_any or []) | join('\n') }}</textarea>
-                  </label>
-                  <label>
-                    Target resale USD
-                    <input type="number" step="any" name="target_resale_usd" value="{{ watch.rules.target_resale_usd }}" required />
-                  </label>
-                  <label>
-                    Minimum profit USD
-                    <input type="number" step="any" name="min_profit_usd" value="{{ watch.rules.min_profit_usd }}" required />
-                  </label>
+          <article class="card watch-card">
+            <div class="watch-header">
+              <div>
+                <strong>{{ watch.market_hash_name }}</strong>
+                <div class="watch-meta">
+                  AppID {{ watch.appid }} · Currency {{ watch.currency_id }} ·
+                  <a href="{{ watch.url }}" target="_blank" rel="noopener">Open listing</a>
                 </div>
-                <div class="actions">
-                  <button type="submit">Update</button>
-                </div>
-              </form>
-            </td>
-            <td>
-              <form method="post" action="/admin/watches/{{ watch.id }}/delete" class="danger" onsubmit="return confirm('Delete watch {{ watch.market_hash_name }}?');">
-                <button type="submit">Delete</button>
-              </form>
-            </td>
-          </tr>
+              </div>
+              <div class="watch-meta">
+                Float range:
+                {% if watch.rules.float_min is not none %}
+                {{ "%.4f" | format(watch.rules.float_min) }}
+                {% else %}
+                any
+                {% endif %}
+                –
+                {% if watch.rules.float_max is not none %}
+                {{ "%.4f" | format(watch.rules.float_max) }}
+                {% else %}
+                any
+                {% endif %}
+                · Target resale ${{ "%.2f" | format(watch.rules.target_resale_usd) }}
+              </div>
+            </div>
+
+            <form method="post" action="/admin/watches/{{ watch.id }}" class="grid" style="gap: 1rem;">
+              <label>
+                Listing URL
+                <input type="url" name="url" value="{{ watch.url }}" required />
+              </label>
+              <div class="grid columns-3">
+                <label>
+                  Float min
+                  <input
+                    type="number"
+                    step="0.0001"
+                    min="0"
+                    max="1"
+                    name="float_min"
+                    value="{{ watch.rules.float_min if watch.rules.float_min is not none else '' }}"
+                  />
+                </label>
+                <label>
+                  Float max
+                  <input
+                    type="number"
+                    step="0.0001"
+                    min="0"
+                    max="1"
+                    name="float_max"
+                    value="{{ watch.rules.float_max if watch.rules.float_max is not none else '' }}"
+                  />
+                </label>
+                <label>
+                  Target resale price (USD)
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    name="target_resale_usd"
+                    value="{{ "%.2f" | format(watch.rules.target_resale_usd) }}"
+                    required
+                  />
+                </label>
+              </div>
+              <button type="submit">Update watch</button>
+              <p class="hint">
+                Minimum profit: ${{ "%.2f" | format(watch.rules.min_profit_usd) }} · Stickers/seed filters preserved from API edits.
+              </p>
+            </form>
+            <form
+              method="post"
+              action="/admin/watches/{{ watch.id }}/delete"
+              onsubmit="return confirm('Delete watch {{ watch.market_hash_name }}?');"
+            >
+              <button type="submit" class="secondary">Delete watch</button>
+            </form>
+          </article>
           {% endfor %}
-        </tbody>
-      </table>
-      {% else %}
-      <p>No watches saved yet.</p>
-      {% endif %}
-    </section>
+        </div>
+        {% else %}
+        <p class="hint">No watches saved yet. Add your first listing above.</p>
+        {% endif %}
+      </section>
+    </div>
   </body>
 </html>

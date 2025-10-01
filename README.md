@@ -51,7 +51,10 @@ INSPECT_RPS_PER_ACCOUNT=0.8
 INSPECT_ACCOUNTS=5
 COMBINED_FEE_RATE=0.15
 COMBINED_FEE_MIN_CENTS=1
+ADMIN_DEFAULT_MIN_PROFIT_USD=0.0
 ```
+
+`ADMIN_DEFAULT_MIN_PROFIT_USD` controls the minimum profit automatically applied when you create watches through the web admin.
 
 ### Docker Compose
 
