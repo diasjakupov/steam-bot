@@ -1,13 +1,13 @@
 # CS2 Read-only Market Watcher
 
-This project provides a read-only monitoring service for Counter-Strike 2 Steam Community Market listings. It polls the first page of each watched item, enriches listings with float data using a local inspect service powered by the csfloat/inspect project, evaluates user-defined profit rules, and sends Telegram alerts for profitable opportunities.
+This project provides a read-only monitoring service for Counter-Strike 2 Steam Community Market listings. It polls the first page of each watched item, enriches listings with float data from the public CSFloat API, evaluates user-defined profit rules, and sends Telegram alerts for profitable opportunities.
 
 ## Features
 
 - FastAPI control API for managing watchlist entries and health checks.
 - Async worker that fetches Steam listing page 1, parses listings, inspects skins, and applies rule filters.
 - Postgres persistence for watchlist entries, listing snapshots, and alert audit trail.
-- Redis-backed rate limits and deduplication to respect Steam and inspect service constraints.
+- Redis-backed rate limits and deduplication to respect Steam and CSFloat API constraints.
 - Telegram notifications with Markdown-formatted summaries.
 
 ## Architecture Overview
@@ -19,16 +19,14 @@ This project provides a read-only monitoring service for Counter-Strike 2 Steam 
 +-------------+        +-----------+        +-----------+
         ^                     ^                    ^
         |                     |                    |
-        |               +-----------+              |
-        +---------------|  Worker   |--------------+
-                        +-----------+
-                                 |
-                                 v
-                     Steam Community Market
-                        CSFloat Checker
+        |               +-----------+        +-------------+
+        +---------------|  Worker   |------->| CSFloat API |
+                        +-----------+        +-------------+
+                                 \
+                                  \-> Steam Community Market
 ```
 
-The worker uses configurable jitter and Redis token buckets to avoid overloading external services. Listing parsing is performed with `selectolax`. The inspect stage uses Playwright to automate the CSFloat checker website (https://csfloat.com/checker) to retrieve float, seed, and sticker metadata before evaluating user rules.
+The worker uses configurable jitter and Redis token buckets to avoid overloading external services. Listing parsing is performed with `selectolax`. The inspect stage retrieves float, seed, and sticker metadata before evaluating user rules.
 
 ## Quick Start
 
@@ -45,19 +43,21 @@ Copy `.env.example` to `.env` and fill in required secrets.
 DATABASE_URL=postgresql+psycopg://steam:steam@postgres/steam
 REDIS_URL=redis://redis:6379/0
 STEAM_CURRENCY_ID=1
-FLOAT_API_TIMEOUT=30
+CSFLOAT_API_BASE_URL=https://api.csgofloat.com
+FLOAT_API_TIMEOUT=10
+FLOAT_API_REQUEST_DELAY=2
 STEAM_HTML_DUMP_DIR=./html-dumps
 TELEGRAM_BOT_TOKEN=replace-me
 TELEGRAM_CHAT_ID=replace-me
 POLL_INTERVAL_S=10
+INSPECT_RPS_PER_ACCOUNT=0.8
+INSPECT_ACCOUNTS=5
 COMBINED_FEE_RATE=0.15
 COMBINED_FEE_MIN_CENTS=1
 ADMIN_DEFAULT_MIN_PROFIT_USD=0.0
 ```
 
 `ADMIN_DEFAULT_MIN_PROFIT_USD` controls the minimum profit automatically applied when you create watches through the web admin.
-
-The worker uses Playwright to automate the public CSFloat checker website (https://csfloat.com/checker) for retrieving item float values and metadata. Inspect requests are rate-limited to 0.25 RPS (one request every 4 seconds) to respect CSFloat's service.
 
 Set `STEAM_HTML_DUMP_DIR` to a writable path if you want the worker to persist the fully rendered Steam listing HTML for debugging. Each fetch writes a timestamped snapshot in that directory.
 The default Docker Compose setup mounts `./html-dumps` into the worker container and wires the environment variable so you can inspect saved pages on the host while tailing `docker compose logs`.
