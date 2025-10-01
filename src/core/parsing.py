@@ -7,11 +7,6 @@ from selectolax.parser import HTMLParser
 
 from .profit import price_to_cents
 
-import structlog
-
-
-logger = structlog.get_logger(__name__)
-
 
 @dataclass
 class ParsedListing:
@@ -49,7 +44,6 @@ def _extract_listing_key(node: HTMLParser) -> str:
 def _extract_urls(node: HTMLParser) -> tuple[Optional[str], Optional[str]]:
     link = node.css_first("a.market_listing_row_link")
     listing_url = link.attributes.get("href") if link else None
-    log = logger.bind(listing_url=listing_url)
     inspect_url = None
     for anchor in node.css("div.market_listing_row_action a"):
         text = anchor.text(strip=True)
@@ -71,22 +65,6 @@ def _extract_urls(node: HTMLParser) -> tuple[Optional[str], Optional[str]]:
         inspect_button = node.css_first("a.market_action_menu_item")
         if inspect_button and "steam://" in inspect_button.attributes.get("href", ""):
             inspect_url = inspect_button.attributes["href"]
-    if inspect_url is None:
-        sample_anchors = []
-        for anchor in node.css("a"):
-            sample_anchors.append(
-                {
-                    "text": anchor.text(strip=True),
-                    "href": anchor.attributes.get("href", ""),
-                    "class": anchor.attributes.get("class", ""),
-                }
-            )
-            if len(sample_anchors) >= 5:
-                break
-        log.warning(
-            "parsing.inspect.not_found",
-            anchor_samples=sample_anchors,
-        )
     return inspect_url, listing_url
 
 

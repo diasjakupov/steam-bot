@@ -36,7 +36,7 @@ class SteamClient:
     def __init__(
         self,
         *,
-        timeout: float = 10.0,
+        timeout: float = 30.0,
         browser: str = "chromium",
         page_fetcher: Optional[PageFetcher] = None,
     ) -> None:
@@ -68,7 +68,11 @@ class SteamClient:
                 await self._cleanup_playwright()
                 raise ValueError(f"Unsupported browser type: {self._browser_name}")
             try:
-                self._browser = await launcher.launch(headless=True)
+                # In many container environments, Chromium must be launched without sandbox
+                self._browser = await launcher.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-dev-shm-usage"],
+                )
             except (PlaywrightError, OSError) as exc:  # pragma: no cover - defensive
                 await self._cleanup_playwright()
                 raise BrowserLaunchError("Failed to launch Playwright browser") from exc
@@ -90,14 +94,28 @@ class SteamClient:
             raise BrowserLaunchError("Browser is not initialized")
 
         page = await self._browser.new_page()
-        try:
-            timeout_ms = int(self._timeout * 1000)
+        timeout_ms = int(self._timeout * 1000)
+        # These Playwright methods are synchronous in Python
+        page.set_default_navigation_timeout(timeout_ms)
+        page.set_default_timeout(timeout_ms)
+
+        async def _navigate_once() -> None:
             await page.goto(url, wait_until="networkidle", timeout=timeout_ms)
             try:
                 await page.wait_for_selector("div.market_listing_row", timeout=timeout_ms)
             except PlaywrightTimeoutError:
-                # Even if listings do not render within the timeout we still capture the page content
+                # Capture whatever rendered; listings may still be parsable
                 pass
+            # Allow additional time for late-loading resources (images, pricing data, etc.).
+            await page.wait_for_timeout(5000)
+
+        try:
+            try:
+                await _navigate_once()
+            except (PlaywrightTimeoutError, PlaywrightError):
+                # Simple one-time retry to mitigate transient flakiness
+                await asyncio.sleep(1.0)
+                await _navigate_once()
             return await page.content()
         except PlaywrightError as exc:  # pragma: no cover - network/runtime failures
             raise BrowserLaunchError("Failed to load listings page") from exc
@@ -143,4 +161,3 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
-

@@ -118,15 +118,14 @@ async def process_watch(
                market_hash_name=watch.market_hash_name, 
                appid=watch.appid)
     listings = await steam.fetch_listings(watch.appid, watch.market_hash_name)
-    logger.info("Fetched listings from Steam",
-               count=len(listings),
+    logger.info("Fetched listings from Steam", 
+               count=len(listings), 
                market_hash_name=watch.market_hash_name)
-
-    # Use conservative rate limit for CSFloat website (0.25 RPS = 1 request per 4 seconds)
+    
     inspect_bucket = await build_bucket(
         redis,
         key="inspect",
-        rps=0.25,
+        rps=get_settings().inspect_rps_per_account * get_settings().inspect_accounts,
     )
     
     new_listings = 0
@@ -144,40 +143,23 @@ async def process_watch(
             )
         )
         snapshot = existing.scalar_one_or_none()
-        if snapshot is not None:
-            if snapshot.inspected:
-                logger.debug(
-                    "Skipping listing already inspected",
-                    listing_key=parsed.listing_key,
-                    price_cents=parsed.price_cents,
-                )
-                continue
-            logger.info(
-                "Reprocessing existing listing without inspect data",
-                listing_key=parsed.listing_key,
-                price_cents=parsed.price_cents,
-                market_hash_name=watch.market_hash_name,
-            )
-            snapshot.parsed = {
-                "listing_url": parsed.listing_url,
-                "inspect_url": parsed.inspect_url,
-                "raw": parsed.raw,
-            }
-        else:
-            new_listings += 1
-
-            snapshot = ListingSnapshot(
-                watchlist_id=watch.id,
-                listing_key=parsed.listing_key,
-                price_cents=parsed.price_cents,
-                parsed={
-                    "listing_url": parsed.listing_url,
-                    "inspect_url": parsed.inspect_url,
-                    "raw": parsed.raw,
-                },
-            )
-            session.add(snapshot)
-            await session.flush()
+        if snapshot:
+            continue
+            
+        new_listings += 1
+        logger.info("Found new listing", 
+                   price_cents=parsed.price_cents,
+                   price_usd=parsed.price_cents/100,
+                   market_hash_name=watch.market_hash_name)
+        
+        snapshot = ListingSnapshot(
+            watchlist_id=watch.id,
+            listing_key=parsed.listing_key,
+            price_cents=parsed.price_cents,
+            parsed={"listing_url": parsed.listing_url, "inspect_url": parsed.inspect_url, "raw": parsed.raw},
+        )
+        session.add(snapshot)
+        await session.flush()
         
         if not parsed.inspect_url:
             logger.debug("Skipping listing without inspect URL", price_cents=parsed.price_cents)
@@ -214,21 +196,15 @@ async def process_watch(
             
         inspect_result = await inspector.inspect(parsed.inspect_url)
         if not inspect_result:
-            logger.warning(
-                "Inspection failed",
-                price_cents=parsed.price_cents,
-                inspect_url=parsed.inspect_url,
-            )
+            logger.warning("Inspection failed", price_cents=parsed.price_cents)
             continue
 
         inspected_listings += 1
-        logger.info(
-            "Successfully inspected item",
-            price_cents=parsed.price_cents,
-            float_value=inspect_result.float_value,
-            paint_seed=inspect_result.paint_seed,
-        )
-
+        logger.info("Successfully inspected item", 
+                   price_cents=parsed.price_cents,
+                   float_value=inspect_result.get("float_value"),
+                   paint_seed=inspect_result.get("paint_seed"))
+        
         result_payload = asdict(inspect_result)
         snapshot.inspected = result_payload
         if cached_history is None:
