@@ -9,7 +9,13 @@ class Settings(BaseSettings):
     database_url: AnyUrl = Field(alias="DATABASE_URL")
     redis_url: AnyUrl = Field(alias="REDIS_URL")
     steam_currency_id: int = Field(default=1, alias="STEAM_CURRENCY_ID")
-    inspect_base_url: AnyUrl = Field(alias="INSPECT_BASE_URL")
+    csfloat_api_base_url: AnyUrl = Field(
+        default="https://api.csgofloat.com",
+        alias="CSFLOAT_API_BASE_URL",
+    )
+    float_api_timeout: float = Field(default=10.0, alias="FLOAT_API_TIMEOUT")
+    float_api_request_delay: float = Field(default=2.0, alias="FLOAT_API_REQUEST_DELAY")
+    steam_html_dump_dir: str | None = Field(default=None, alias="STEAM_HTML_DUMP_DIR")
     telegram_bot_token: str = Field(alias="TELEGRAM_BOT_TOKEN")
     telegram_chat_id: str = Field(alias="TELEGRAM_CHAT_ID")
     poll_interval_s: float = Field(default=10.0, alias="POLL_INTERVAL_S")
@@ -31,4 +37,3 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()  # type: ignore[arg-type]
-

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import re
+import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Awaitable, Callable, Iterable, Optional
 from urllib.parse import quote
 
 import httpx
+import structlog
 from playwright.async_api import (
     Browser,
     Error as PlaywrightError,
@@ -39,8 +43,20 @@ class SteamClient:
         timeout: float = 30.0,
         browser: str = "chromium",
         page_fetcher: Optional[PageFetcher] = None,
+        html_dump_dir: str | Path | None = None,
     ) -> None:
         self.settings = get_settings()
+        dump_dir_setting = (
+            html_dump_dir
+            if html_dump_dir is not None
+            else self.settings.steam_html_dump_dir
+        )
+        self._html_dump_dir = (
+            Path(dump_dir_setting).expanduser()
+            if dump_dir_setting
+            else None
+        )
+        self.logger = structlog.get_logger(__name__)
         self.client = httpx.AsyncClient(
             timeout=timeout, headers={"User-Agent": "cs2-market-watcher/1.0"}
         )
@@ -85,9 +101,13 @@ class SteamClient:
             await self._playwright.stop()
             self._playwright = None
 
-    async def _fetch_page_content(self, url: str) -> str:
+    async def _fetch_page_content(
+        self, url: str, *, dump_name: str | None = None
+    ) -> str:
         if self._page_fetcher is not None:
-            return await self._page_fetcher(url)
+            html = await self._page_fetcher(url)
+            self._maybe_dump_html(dump_name, html)
+            return html
 
         await self._ensure_browser()
         if self._browser is None:
@@ -116,11 +136,35 @@ class SteamClient:
                 # Simple one-time retry to mitigate transient flakiness
                 await asyncio.sleep(1.0)
                 await _navigate_once()
-            return await page.content()
+            html = await page.content()
+            self._maybe_dump_html(dump_name, html)
+            return html
         except PlaywrightError as exc:  # pragma: no cover - network/runtime failures
             raise BrowserLaunchError("Failed to load listings page") from exc
         finally:
             await page.close()
+
+    @staticmethod
+    def _sanitize_dump_name(label: str) -> str:
+        slug = re.sub(r"[^A-Za-z0-9._-]+", "_", label).strip("_")
+        return slug[:80] or "listing"
+
+    def _maybe_dump_html(self, dump_name: str | None, html: str) -> None:
+        if not dump_name or not html or self._html_dump_dir is None:
+            return
+        try:
+            self._html_dump_dir.mkdir(parents=True, exist_ok=True)
+            slug = self._sanitize_dump_name(dump_name)
+            timestamp = int(time.time())
+            path = self._html_dump_dir / f"{slug}-{timestamp}.html"
+            path.write_text(html, encoding="utf-8")
+            self.logger.info("steam.html_dump_saved", path=str(path))
+        except Exception as exc:  # pragma: no cover - diagnostics only
+            self.logger.warning(
+                "steam.html_dump_failed",
+                dump_name=dump_name,
+                error=str(exc),
+            )
 
     async def price_overview(self, appid: int, market_hash_name: str) -> PriceOverview:
         params = {
@@ -145,7 +189,8 @@ class SteamClient:
             f"https://steamcommunity.com/market/listings/{appid}/{encoded_name}?count={count}"
             f"&currency={self.settings.steam_currency_id}"
         )
-        page_html = await self._fetch_page_content(url)
+        dump_name = f"{appid}-{market_hash_name}"
+        page_html = await self._fetch_page_content(url, dump_name=dump_name)
         return list(parse_results_html(page_html))
 
 

@@ -143,23 +143,46 @@ async def process_watch(
             )
         )
         snapshot = existing.scalar_one_or_none()
-        if snapshot:
-            continue
-            
-        new_listings += 1
-        logger.info("Found new listing", 
-                   price_cents=parsed.price_cents,
-                   price_usd=parsed.price_cents/100,
-                   market_hash_name=watch.market_hash_name)
-        
-        snapshot = ListingSnapshot(
-            watchlist_id=watch.id,
-            listing_key=parsed.listing_key,
-            price_cents=parsed.price_cents,
-            parsed={"listing_url": parsed.listing_url, "inspect_url": parsed.inspect_url, "raw": parsed.raw},
-        )
-        session.add(snapshot)
-        await session.flush()
+        if snapshot is not None:
+            if snapshot.inspected:
+                logger.debug(
+                    "Skipping listing already inspected",
+                    listing_key=parsed.listing_key,
+                    price_cents=parsed.price_cents,
+                )
+                continue
+            logger.info(
+                "Reprocessing existing listing without inspect data",
+                listing_key=parsed.listing_key,
+                price_cents=parsed.price_cents,
+                market_hash_name=watch.market_hash_name,
+            )
+            snapshot.parsed = {
+                "listing_url": parsed.listing_url,
+                "inspect_url": parsed.inspect_url,
+                "raw": parsed.raw,
+            }
+        else:
+            new_listings += 1
+            logger.info(
+                "Found new listing",
+                price_cents=parsed.price_cents,
+                price_usd=parsed.price_cents / 100,
+                market_hash_name=watch.market_hash_name,
+            )
+
+            snapshot = ListingSnapshot(
+                watchlist_id=watch.id,
+                listing_key=parsed.listing_key,
+                price_cents=parsed.price_cents,
+                parsed={
+                    "listing_url": parsed.listing_url,
+                    "inspect_url": parsed.inspect_url,
+                    "raw": parsed.raw,
+                },
+            )
+            session.add(snapshot)
+            await session.flush()
         
         if not parsed.inspect_url:
             logger.debug("Skipping listing without inspect URL", price_cents=parsed.price_cents)

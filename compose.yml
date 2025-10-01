@@ -10,24 +10,15 @@ services:
   redis:
     image: redis:7
     command: ["redis-server", "--save", "", "--appendonly", "no"]
-  inspect:
-    build:
-      context: ./inspect
-    volumes:
-      - ./inspect/config.js:/app/config.js:ro
-    environment:
-      - STEAM_BOT_USER=${STEAM_BOT_USER}
-      - STEAM_BOT_PASS=${STEAM_BOT_PASS}
-      - STEAM_BOT_AUTH=${STEAM_BOT_AUTH}
-    ports:
-      - "5000:5000"
   api:
     build: .
     environment:
       DATABASE_URL: postgresql+psycopg://steam:steam@postgres/steam
       REDIS_URL: redis://redis:6379/0
       STEAM_CURRENCY_ID: 1
-      INSPECT_BASE_URL: http://inspect:5000
+      CSFLOAT_API_BASE_URL: https://api.csgofloat.com
+      FLOAT_API_TIMEOUT: 10
+      FLOAT_API_REQUEST_DELAY: 2
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
       POLL_INTERVAL_S: 10
@@ -41,14 +32,18 @@ services:
     depends_on:
       - postgres
       - redis
-      - inspect
   worker:
     build: .
+    volumes:
+      - ./html-dumps:/data/html-dumps
     environment:
       DATABASE_URL: postgresql+psycopg://steam:steam@postgres/steam
       REDIS_URL: redis://redis:6379/0
       STEAM_CURRENCY_ID: 1
-      INSPECT_BASE_URL: http://inspect:5000
+      CSFLOAT_API_BASE_URL: https://api.csgofloat.com
+      FLOAT_API_TIMEOUT: 10
+      FLOAT_API_REQUEST_DELAY: 2
+      STEAM_HTML_DUMP_DIR: /data/html-dumps
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
       POLL_INTERVAL_S: 10
@@ -60,7 +55,6 @@ services:
     depends_on:
       - postgres
       - redis
-      - inspect
 
 volumes:
   postgres-data:

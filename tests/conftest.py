@@ -16,7 +16,9 @@ def default_env(monkeypatch):
         "DATABASE_URL": "postgresql+psycopg://user:pass@localhost/db",
         "REDIS_URL": "redis://localhost:6379/0",
         "STEAM_CURRENCY_ID": "1",
-        "INSPECT_BASE_URL": "http://inspect:5000",
+        "CSFLOAT_API_BASE_URL": "http://float-api:5000",
+        "FLOAT_API_TIMEOUT": "5",
+        "FLOAT_API_REQUEST_DELAY": "0",
         "TELEGRAM_BOT_TOKEN": "token",
         "TELEGRAM_CHAT_ID": "chat",
         "POLL_INTERVAL_S": "10",
@@ -30,4 +32,3 @@ def default_env(monkeypatch):
     core_config.get_settings.cache_clear()
     yield
     core_config.get_settings.cache_clear()
-
