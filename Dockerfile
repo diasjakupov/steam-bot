@@ -19,6 +19,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libdbus-1-3 \
     libdrm2 \
     libglib2.0-0 \
+    libgdk-pixbuf2.0-0 \
+    libgbm1 \
+    libgtk-3-0 \
     libnspr4 \
     libnss3 \
     libpango-1.0-0 \
