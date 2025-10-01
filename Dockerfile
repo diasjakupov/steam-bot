@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     ca-certificates \
     fonts-liberation \
-    fonts-ubuntu \
+    fonts-noto-color-emoji \
     fonts-unifont \
     libasound2 \
     libatk-bridge2.0-0 \
