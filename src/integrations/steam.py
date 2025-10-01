@@ -13,7 +13,6 @@ from playwright.async_api import (
     TimeoutError as PlaywrightTimeoutError,
     async_playwright,
 )
-import structlog
 
 from ..core.config import get_settings
 from ..core.parsing import ParsedListing, parse_results_html
@@ -27,9 +26,6 @@ class PriceOverview:
 
 
 PageFetcher = Callable[[str], Awaitable[str]]
-
-
-logger = structlog.get_logger(__name__)
 
 
 class BrowserLaunchError(RuntimeError):
@@ -131,33 +127,8 @@ class SteamClient:
             f"https://steamcommunity.com/market/listings/{appid}/{encoded_name}?count={count}"
             f"&currency={self.settings.steam_currency_id}"
         )
-        try:
-            page_html = await self._fetch_page_content(url)
-        except BrowserLaunchError as exc:
-            logger.warning(
-                "steam_playwright_launch_failed",
-                appid=appid,
-                market_hash_name=market_hash_name,
-                error=str(exc),
-            )
-            page_html = await self._fetch_rendered_results(appid, market_hash_name, count)
+        page_html = await self._fetch_page_content(url)
         return list(parse_results_html(page_html))
-
-    async def _fetch_rendered_results(
-        self, appid: int, market_hash_name: str, count: int
-    ) -> str:
-        params = {
-            "start": 0,
-            "count": count,
-            "currency": self.settings.steam_currency_id,
-            "format": "json",
-        }
-        encoded_name = quote(market_hash_name, safe="")
-        url = f"https://steamcommunity.com/market/listings/{appid}/{encoded_name}/render"
-        resp = await self.client.get(url, params=params)
-        resp.raise_for_status()
-        payload = resp.json()
-        return payload.get("results_html", "")
 
 
 async def main() -> None:

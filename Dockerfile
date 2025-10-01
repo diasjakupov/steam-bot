@@ -1,7 +1,8 @@
 FROM python:3.11-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 WORKDIR /app
 
@@ -35,6 +36,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxshmfence1 \
     wget \
     && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p ${PLAYWRIGHT_BROWSERS_PATH} \
+    && chmod -R 755 ${PLAYWRIGHT_BROWSERS_PATH}
 
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
