@@ -8,10 +8,12 @@ from urllib.parse import quote
 import httpx
 from playwright.async_api import (
     Browser,
+    Error as PlaywrightError,
     Playwright,
     TimeoutError as PlaywrightTimeoutError,
     async_playwright,
 )
+import structlog
 
 from ..core.config import get_settings
 from ..core.parsing import ParsedListing, parse_results_html
@@ -25,6 +27,13 @@ class PriceOverview:
 
 
 PageFetcher = Callable[[str], Awaitable[str]]
+
+
+logger = structlog.get_logger(__name__)
+
+
+class BrowserLaunchError(RuntimeError):
+    """Raised when Playwright fails to launch a browser instance."""
 
 
 class SteamClient:
@@ -49,12 +58,7 @@ class SteamClient:
     async def close(self) -> None:
         await self.client.aclose()
         async with self._browser_lock:
-            if self._browser is not None:
-                await self._browser.close()
-                self._browser = None
-            if self._playwright is not None:
-                await self._playwright.stop()
-                self._playwright = None
+            await self._cleanup_playwright()
 
     async def _ensure_browser(self) -> None:
         if self._page_fetcher is not None or self._browser is not None:
@@ -65,8 +69,21 @@ class SteamClient:
             self._playwright = await async_playwright().start()
             launcher = getattr(self._playwright, self._browser_name, None)
             if launcher is None:
+                await self._cleanup_playwright()
                 raise ValueError(f"Unsupported browser type: {self._browser_name}")
-            self._browser = await launcher.launch(headless=True)
+            try:
+                self._browser = await launcher.launch(headless=True)
+            except (PlaywrightError, OSError) as exc:  # pragma: no cover - defensive
+                await self._cleanup_playwright()
+                raise BrowserLaunchError("Failed to launch Playwright browser") from exc
+
+    async def _cleanup_playwright(self) -> None:
+        if self._browser is not None:
+            await self._browser.close()
+            self._browser = None
+        if self._playwright is not None:
+            await self._playwright.stop()
+            self._playwright = None
 
     async def _fetch_page_content(self, url: str) -> str:
         if self._page_fetcher is not None:
@@ -74,7 +91,7 @@ class SteamClient:
 
         await self._ensure_browser()
         if self._browser is None:
-            raise RuntimeError("Browser is not initialized")
+            raise BrowserLaunchError("Browser is not initialized")
 
         page = await self._browser.new_page()
         try:
@@ -86,6 +103,8 @@ class SteamClient:
                 # Even if listings do not render within the timeout we still capture the page content
                 pass
             return await page.content()
+        except PlaywrightError as exc:  # pragma: no cover - network/runtime failures
+            raise BrowserLaunchError("Failed to load listings page") from exc
         finally:
             await page.close()
 
@@ -104,14 +123,41 @@ class SteamClient:
             volume=data.get("volume"),
         )
 
-    async def fetch_listings(self, appid: int, market_hash_name: str, count: int = 100) -> Iterable[ParsedListing]:
+    async def fetch_listings(
+        self, appid: int, market_hash_name: str, count: int = 100
+    ) -> Iterable[ParsedListing]:
         encoded_name = quote(market_hash_name, safe="")
         url = (
             f"https://steamcommunity.com/market/listings/{appid}/{encoded_name}?count={count}"
             f"&currency={self.settings.steam_currency_id}"
         )
-        page_html = await self._fetch_page_content(url)
+        try:
+            page_html = await self._fetch_page_content(url)
+        except BrowserLaunchError as exc:
+            logger.warning(
+                "steam_playwright_launch_failed",
+                appid=appid,
+                market_hash_name=market_hash_name,
+                error=str(exc),
+            )
+            page_html = await self._fetch_rendered_results(appid, market_hash_name, count)
         return list(parse_results_html(page_html))
+
+    async def _fetch_rendered_results(
+        self, appid: int, market_hash_name: str, count: int
+    ) -> str:
+        params = {
+            "start": 0,
+            "count": count,
+            "currency": self.settings.steam_currency_id,
+            "format": "json",
+        }
+        encoded_name = quote(market_hash_name, safe="")
+        url = f"https://steamcommunity.com/market/listings/{appid}/{encoded_name}/render"
+        resp = await self.client.get(url, params=params)
+        resp.raise_for_status()
+        payload = resp.json()
+        return payload.get("results_html", "")
 
 
 async def main() -> None:
