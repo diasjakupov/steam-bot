@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+from datetime import datetime
 from dataclasses import asdict
 
 import structlog
@@ -11,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import get_settings
 from ..core.db import get_sessionmaker, init_models
-from ..core.models import Alert, ListingSnapshot, Watchlist
+from ..core.models import Alert, InspectHistory, ListingSnapshot, Watchlist
 from ..core.profit import ProfitInputs, is_profitable
 from ..core.rate_limit import build_bucket
 from ..integrations.inspect import InspectClient
@@ -19,6 +20,12 @@ from ..integrations.steam import SteamClient
 from ..integrations.telegram import TelegramClient
 
 logger = structlog.get_logger(__name__)
+WORKER_STATE_KEY = "worker:enabled"
+
+
+async def is_worker_enabled(redis: Redis) -> bool:
+    value = await redis.get(WORKER_STATE_KEY)
+    return value is None or value != b"0"
 
 
 async def evaluate_and_alert(
@@ -125,6 +132,9 @@ async def process_watch(
     inspected_listings = 0
     
     for parsed in listings:
+        if not await is_worker_enabled(redis):
+            logger.info("Worker stop requested, ending current cycle early")
+            break
         existing = await session.execute(
             select(ListingSnapshot).where(
                 ListingSnapshot.watchlist_id == watch.id,
@@ -154,11 +164,31 @@ async def process_watch(
         if not parsed.inspect_url:
             logger.debug("Skipping listing without inspect URL", price_cents=parsed.price_cents)
             continue
-            
+        
+        cached_history = None
+        if parsed.inspect_url:
+            history_result = await session.execute(
+                select(InspectHistory).where(InspectHistory.inspect_url == parsed.inspect_url)
+            )
+            cached_history = history_result.scalar_one_or_none()
+        
+        if cached_history and cached_history.result:
+            logger.info(
+                "Using cached inspect result",
+                price_cents=parsed.price_cents,
+                inspect_url=parsed.inspect_url,
+            )
+            cached_history.last_inspected = datetime.utcnow()
+            cached_history.watchlist_id = watch.id
+            snapshot.inspected = cached_history.result
+            inspected_listings += 1
+            await evaluate_and_alert(session, telegram, watch, snapshot, snapshot.inspected)
+            continue
+
         logger.info("Attempting to inspect item", 
                    price_cents=parsed.price_cents,
                    inspect_url=parsed.inspect_url)
-        
+
         acquired = await inspect_bucket.acquire(timeout=5)
         if not acquired:
             logger.warning("Rate limit reached, skipping inspection", price_cents=parsed.price_cents)
@@ -168,14 +198,26 @@ async def process_watch(
         if not inspect_result:
             logger.warning("Inspection failed", price_cents=parsed.price_cents)
             continue
-            
+
         inspected_listings += 1
         logger.info("Successfully inspected item", 
                    price_cents=parsed.price_cents,
                    float_value=inspect_result.get("float_value"),
                    paint_seed=inspect_result.get("paint_seed"))
         
-        snapshot.inspected = asdict(inspect_result)
+        result_payload = asdict(inspect_result)
+        snapshot.inspected = result_payload
+        if cached_history is None:
+            cached_history = InspectHistory(
+                inspect_url=parsed.inspect_url,
+                result=result_payload,
+                watchlist_id=watch.id,
+            )
+            session.add(cached_history)
+        else:
+            cached_history.result = result_payload
+            cached_history.watchlist_id = watch.id
+        cached_history.last_inspected = datetime.utcnow()
         await evaluate_and_alert(session, telegram, watch, snapshot, snapshot.inspected)
     
     logger.info("Completed processing watch", 
@@ -189,32 +231,61 @@ async def worker_loop() -> None:
     settings = get_settings()
     logger.info("Starting worker loop", poll_interval=settings.poll_interval_s)
     redis = Redis.from_url(str(settings.redis_url))
+    await redis.setnx(WORKER_STATE_KEY, "1")
     sessionmaker = get_sessionmaker()
     steam = SteamClient()
     inspector = InspectClient()
     telegram = TelegramClient()
     try:
+        paused_logged = False
         while True:
+            if not await is_worker_enabled(redis):
+                if not paused_logged:
+                    logger.info("Worker paused by admin")
+                    paused_logged = True
+                await asyncio.sleep(5)
+                continue
+            if paused_logged:
+                logger.info("Worker resumed by admin")
+                paused_logged = False
+
             logger.info("Starting new polling cycle")
             async with sessionmaker() as session:
                 result = await session.execute(select(Watchlist))
                 watches = result.scalars().all()
                 logger.info("Found watches to process", count=len(watches))
-                
+
                 for watch in watches:
+                    if not await is_worker_enabled(redis):
+                        logger.info("Worker stop requested before processing remaining watches")
+                        break
+                    # Capture primitives before potential lazy loads to avoid MissingGreenlet
+                    watch_id = watch.id
+                    watch_name = watch.market_hash_name
+                    watch_appid = watch.appid
                     try:
-                        logger.info("Processing watch", 
-                                  watch_id=watch.id, 
-                                  market_hash_name=watch.market_hash_name,
-                                  appid=watch.appid)
+                        logger.info(
+                            "Processing watch",
+                            watch_id=watch_id,
+                            market_hash_name=watch_name,
+                            appid=watch_appid,
+                        )
                         await process_watch(session, steam, inspector, telegram, redis, watch)
                         await session.commit()
-                        logger.info("Successfully processed watch", watch_id=watch.id)
+                        logger.info("Successfully processed watch", watch_id=watch_id)
                     except Exception as exc:  # pylint: disable=broad-except
                         await session.rollback()
-                        logger.exception("watch processing failed", watch_id=watch.id, exc_info=exc)
-                    await asyncio.sleep(random.uniform(settings.poll_interval_s * 0.2, settings.poll_interval_s * 0.4))
-            
+                        logger.exception("watch processing failed", watch_id=watch_id, exc_info=exc)
+                    await asyncio.sleep(
+                        random.uniform(
+                            settings.poll_interval_s * 0.2, settings.poll_interval_s * 0.4
+                        )
+                    )
+
+            if not await is_worker_enabled(redis):
+                logger.info("Worker stop request detected after cycle completion")
+                continue
+
             logger.info("Completed polling cycle, sleeping", sleep_duration=settings.poll_interval_s)
             await asyncio.sleep(settings.poll_interval_s + random.uniform(-2, 2))
     finally:
@@ -239,4 +310,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

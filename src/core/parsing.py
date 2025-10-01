@@ -45,9 +45,26 @@ def _extract_urls(node: HTMLParser) -> tuple[Optional[str], Optional[str]]:
     link = node.css_first("a.market_listing_row_link")
     listing_url = link.attributes.get("href") if link else None
     inspect_url = None
-    inspect_button = node.css_first("a.market_action_menu_item")
-    if inspect_button and "steam://" in inspect_button.attributes.get("href", ""):
-        inspect_url = inspect_button.attributes["href"]
+    for anchor in node.css("div.market_listing_row_action a"):
+        text = anchor.text(strip=True)
+        if text and "inspect in game" in text.lower():
+            href = anchor.attributes.get("href", "")
+            if href.startswith("steam://"):
+                inspect_url = href
+                break
+    if inspect_url is None:
+        for anchor in node.css("a"):
+            text = anchor.text(strip=True)
+            if not text or "inspect in game" not in text.lower():
+                continue
+            href = anchor.attributes.get("href", "")
+            if href.startswith("steam://"):
+                inspect_url = href
+                break
+    if inspect_url is None:
+        inspect_button = node.css_first("a.market_action_menu_item")
+        if inspect_button and "steam://" in inspect_button.attributes.get("href", ""):
+            inspect_url = inspect_button.attributes["href"]
     return inspect_url, listing_url
 
 
@@ -67,4 +84,3 @@ def parse_results_html(results_html: str) -> Iterable[ParsedListing]:
             listing_url=listing_url,
             raw=row.attributes,
         )
-

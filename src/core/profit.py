@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 
 @dataclass
@@ -12,10 +13,20 @@ class ProfitInputs:
 
 
 def price_to_cents(price_str: str) -> int:
-    cleaned = price_str.replace("$", "").replace(",", "").strip()
-    if cleaned.startswith("."):
-        cleaned = "0" + cleaned
-    dollars = float(cleaned)
+    # Normalize and extract a numeric value from strings like
+    # "$45.50", "45.50 USD", "USD 45.50", "1,234.56", etc.
+    if not price_str:
+        return 0
+    # Remove currency symbols/letters while preserving digits, dots, commas
+    numeric_part = re.sub(r"[^0-9.,]", "", price_str)
+    # Remove thousands separators
+    numeric_part = numeric_part.replace(",", "")
+    # Handle inputs like ".50"
+    if numeric_part.startswith("."):
+        numeric_part = "0" + numeric_part
+    if not numeric_part or numeric_part == ".":
+        return 0
+    dollars = float(numeric_part)
     return int(round(dollars * 100))
 
 

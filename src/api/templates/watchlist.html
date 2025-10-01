@@ -136,6 +136,28 @@
         margin-top: -0.25rem;
       }
 
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.9rem;
+      }
+
+      th,
+      td {
+        padding: 0.5rem 0.75rem;
+        text-align: left;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.4);
+      }
+
+      th {
+        font-weight: 700;
+        background: rgba(79, 70, 229, 0.08);
+      }
+
+      tbody tr:nth-child(odd) {
+        background: rgba(148, 163, 184, 0.1);
+      }
+
       .watch-card {
         gap: 1.25rem;
       }
@@ -189,6 +211,62 @@
       {% if status_message %}
       <div class="status">{{ status_message }}</div>
       {% endif %}
+
+      <section class="card">
+        <h2>Worker control</h2>
+        <p class="hint">
+          Worker is currently <strong>{{ 'running' if worker_enabled else 'paused' }}</strong>.
+        </p>
+        <div class="grid columns-3" style="gap: 0.75rem;">
+          <form method="post" action="/admin/worker/start">
+            <button type="submit">Start worker</button>
+          </form>
+          <form method="post" action="/admin/worker/stop">
+            <button type="submit" class="secondary">Stop worker</button>
+          </form>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Inspect history</h2>
+        {% if inspect_history %}
+        <div class="hint">Showing the 50 most recent cached inspections.</div>
+        <div style="overflow-x: auto;">
+          <table>
+            <thead>
+              <tr>
+                <th>Last inspected</th>
+                <th>Item</th>
+                <th>Float</th>
+                <th>Paint seed</th>
+                <th>Inspect URL</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for entry in inspect_history %}
+              <tr>
+                <td>{{ entry.last_inspected or '—' }}</td>
+                <td>{{ entry.watch_name or 'Unknown watch' }}</td>
+                <td>
+                  {% if entry.float_value is not none %}
+                  {{ "%.6f" | format(entry.float_value) }}
+                  {% else %}
+                  —
+                  {% endif %}
+                </td>
+                <td>{{ entry.paint_seed if entry.paint_seed is not none else '—' }}</td>
+                <td style="font-size: 0.8rem;">
+                  <a href="{{ entry.inspect_url }}" target="_blank" rel="noopener">Open</a>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <p class="hint">No inspection history recorded yet.</p>
+        {% endif %}
+      </section>
 
       <section class="card">
         <h2>Add a new watch</h2>

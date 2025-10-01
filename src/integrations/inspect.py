@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 import httpx
+import structlog
 
 from ..core.config import get_settings
 
@@ -22,6 +23,7 @@ class InspectClient:
     def __init__(self, *, timeout: float = 10.0) -> None:
         self.settings = get_settings()
         self.client = httpx.AsyncClient(timeout=timeout)
+        self.logger = structlog.get_logger(__name__)
 
     async def close(self) -> None:
         await self.client.aclose()
@@ -32,11 +34,22 @@ class InspectClient:
         delay = 1.0
         for attempt in range(retries):
             try:
+                self.logger.info(
+                    "csgofloat.inspect.request",
+                    inspect_url=inspect_url,
+                    attempt=attempt + 1,
+                )
                 resp = await self.client.get(str(self.settings.inspect_base_url), params=params)
                 resp.raise_for_status()
                 payload: Dict[str, Any] = resp.json()
+                float_value = payload.get("float_value")
+                self.logger.info(
+                    "csgofloat.inspect.response",
+                    inspect_url=inspect_url,
+                    float_value=float_value,
+                )
                 return InspectResult(
-                    float_value=payload.get("float_value"),
+                    float_value=float_value,
                     paint_seed=payload.get("paint_seed"),
                     paint_index=payload.get("paint_index"),
                     stickers=payload.get("stickers", []),
@@ -54,4 +67,3 @@ class InspectClient:
                 await asyncio.sleep(delay)
                 delay *= 2
         return None
-
