@@ -15,6 +15,10 @@ services:
       context: ./inspect
     volumes:
       - ./inspect/config.js:/app/config.js:ro
+    environment:
+      - STEAM_BOT_USER=${STEAM_BOT_USER}
+      - STEAM_BOT_PASS=${STEAM_BOT_PASS}
+      - STEAM_BOT_AUTH=${STEAM_BOT_AUTH}
     ports:
       - "5000:5000"
   api:

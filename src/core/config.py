@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from pydantic import AnyUrl, BaseSettings, Field
+from pydantic import AnyUrl, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -18,10 +19,11 @@ class Settings(BaseSettings):
     combined_fee_min_cents: int = Field(default=1, alias="COMBINED_FEE_MIN_CENTS")
     admin_default_min_profit_usd: float = Field(default=0.0, alias="ADMIN_DEFAULT_MIN_PROFIT_USD")
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = True
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+    )
 
 
 @lru_cache
