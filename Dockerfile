@@ -46,6 +46,13 @@ RUN mkdir -p ${PLAYWRIGHT_BROWSERS_PATH} \
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Attempt to install any additional system dependencies Playwright expects. The
+# upstream script still references transitional font packages that are no longer
+# available on Debian trixie, so we ignore failures after preinstalling the
+# required libraries above.
+RUN python -m playwright install-deps chromium || \
+    (echo "playwright install-deps chromium failed; continuing with manually installed deps" && exit 0)
+
 # Install the Playwright-managed Chromium browser ahead of time so the
 # application can launch it without downloading at runtime.
 RUN python -m playwright install chromium
