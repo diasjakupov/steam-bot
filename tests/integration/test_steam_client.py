@@ -1,5 +1,4 @@
 import pytest
-
 from src.integrations.steam import SteamClient
 
 
