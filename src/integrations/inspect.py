@@ -1,165 +1,212 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
-from urllib.parse import quote
+import re
+from dataclasses import dataclass
+from typing import Any, Dict, Optional
 
-import httpx
 import structlog
+from playwright.async_api import (
+    Browser,
+    Error as PlaywrightError,
+    Playwright,
+    TimeoutError as PlaywrightTimeoutError,
+    async_playwright,
+)
 
 from ..core.config import get_settings
 
 
-def _coerce_optional_int(value: Any) -> Optional[int]:
-    try:
-        return int(value) if value is not None else None
-    except (TypeError, ValueError):
-        return None
+logger = structlog.get_logger(__name__)
 
 
 @dataclass
 class InspectResult:
     float_value: float
-    paint_seed: Optional[int]
-    paint_index: Optional[int]
-    stickers: List[Dict[str, Any]] = field(default_factory=list)
-    wear_name: Optional[str] = None
-    custom_name: Optional[str] = None
-    raw_iteminfo: Dict[str, Any] = field(default_factory=dict)
+    paint_seed: int | None
+    paint_index: int | None
+    stickers: list[Dict[str, Any]]
+    wear_name: str | None
 
 
 class InspectClient:
     def __init__(self, *, timeout: Optional[float] = None) -> None:
-        settings = get_settings()
-        self.logger = structlog.get_logger(__name__)
-        self.base_url = str(settings.csfloat_api_base_url).rstrip("/")
-        request_timeout = timeout if timeout is not None else settings.float_api_timeout
-        self.request_delay = settings.float_api_request_delay
-        self.client = httpx.AsyncClient(timeout=request_timeout)
+        self.settings = get_settings()
+        self._timeout = timeout if timeout is not None else self.settings.float_api_timeout
+        self._playwright: Playwright | None = None
+        self._browser: Browser | None = None
+        self._browser_lock = asyncio.Lock()
 
     async def close(self) -> None:
-        await self.client.aclose()
+        async with self._browser_lock:
+            await self._cleanup_playwright()
+
+    async def _ensure_browser(self) -> None:
+        if self._browser is not None:
+            return
+        async with self._browser_lock:
+            if self._browser is not None:
+                return
+            self._playwright = await async_playwright().start()
+            try:
+                self._browser = await self._playwright.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-dev-shm-usage"],
+                )
+            except (PlaywrightError, OSError) as exc:
+                await self._cleanup_playwright()
+                raise RuntimeError("Failed to launch Playwright browser") from exc
+
+    async def _cleanup_playwright(self) -> None:
+        if self._browser is not None:
+            await self._browser.close()
+            self._browser = None
+        if self._playwright is not None:
+            await self._playwright.stop()
+            self._playwright = None
 
     async def inspect(self, inspect_url: str) -> Optional[InspectResult]:
-        if not inspect_url or not inspect_url.startswith("steam://"):
-            self.logger.error(
-                "inspect.invalid_url",
-                inspect_url=inspect_url,
-            )
-            return None
+        retries = 3
+        delay = 2.0
+        for attempt in range(retries):
+            try:
+                return await self._inspect_once(inspect_url)
+            except (PlaywrightError, PlaywrightTimeoutError, ValueError) as exc:
+                logger.warning(
+                    "Inspect attempt failed",
+                    attempt=attempt + 1,
+                    retries=retries,
+                    error=str(exc),
+                    inspect_url=inspect_url,
+                )
+                if attempt < retries - 1:
+                    await asyncio.sleep(delay)
+                    delay *= 2
+                else:
+                    logger.error("All inspect attempts failed", inspect_url=inspect_url)
+                    return None
+        return None
 
-        encoded_link = quote(inspect_url, safe=":/%")
-        request_url = f"{self.base_url}/?url={encoded_link}"
+    async def _inspect_once(self, inspect_url: str) -> InspectResult:
+        await self._ensure_browser()
+        if self._browser is None:
+            raise RuntimeError("Browser is not initialized")
 
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
-            ),
-            "sec-ch-ua-platform": '"macOS"',
-            "Referer": "https://csfloat.com/",
-            "Origin": "https://csfloat.com",
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Encoding": "gzip, deflate, br, zstd",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-site",
-            "sec-ch-ua": '"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"',
-            "sec-ch-ua-mobile": "?0",
-        }
+        page = await self._browser.new_page()
+        timeout_ms = int(self._timeout * 1000)
+        page.set_default_navigation_timeout(timeout_ms)
+        page.set_default_timeout(timeout_ms)
 
         try:
-            self.logger.debug(
-                "inspect.request",
-                request_url=request_url,
-                headers=headers,
+            logger.info("Navigating to CSFloat checker", inspect_url=inspect_url)
+            await page.goto("https://csfloat.com/checker")
+
+            # Wait 5 seconds for page to load
+            logger.debug("Waiting 5 seconds for page to load")
+            await page.wait_for_timeout(5000)
+
+            # Fill in the inspect URL
+            logger.debug("Filling inspect URL into input field")
+            await page.fill("#mat-input-0", inspect_url)
+
+            # Wait 5 seconds for results to load
+            logger.debug("Waiting 5 seconds for results to load")
+            await page.wait_for_timeout(5000)
+
+            # Check if float div appeared (correct class: mat-mdc-tooltip-trigger wear)
+            float_element = await page.query_selector(".mat-mdc-tooltip-trigger.wear")
+            if not float_element:
+                logger.warning("Float value element not found after 5 seconds, skipping", inspect_url=inspect_url)
+                return None
+
+            float_text = await float_element.inner_text()
+            float_value = self._parse_float(float_text)
+
+            logger.info("Successfully extracted float value", float_value=float_value)
+
+            # Try to extract additional data if available
+            paint_seed = await self._extract_paint_seed(page)
+            paint_index = await self._extract_paint_index(page)
+            wear_name = await self._extract_wear_name(page)
+            stickers = await self._extract_stickers(page)
+
+            return InspectResult(
+                float_value=float_value,
+                paint_seed=paint_seed,
+                paint_index=paint_index,
+                stickers=stickers,
+                wear_name=wear_name,
             )
-            response = await self.client.get(request_url, headers=headers)
-            response.raise_for_status()
-            data: Dict[str, Any] = response.json()
-        except httpx.HTTPStatusError as exc:  # pragma: no cover - exercised in integration flows
-            status = exc.response.status_code if exc.response is not None else "unknown"
-            self.logger.error(
-                "inspect.http_error",
-                inspect_url=inspect_url,
-                request_url=request_url,
-                headers=headers,
-                status_code=status,
-                response_text=getattr(exc.response, "text", ""),
-            )
-            if exc.response is not None and exc.response.status_code == 429:
-                self.logger.warning("inspect.rate_limited")
-            return None
-        except httpx.RequestError as exc:
-            self.logger.error(
-                "inspect.request_error",
-                inspect_url=inspect_url,
-                request_url=request_url,
-                headers=headers,
-                error=str(exc),
-            )
-            return None
-        except ValueError as exc:
-            self.logger.error(
-                "inspect.json_error",
-                inspect_url=inspect_url,
-                request_url=request_url,
-                headers=headers,
-                error=str(exc),
-            )
-            return None
-        except Exception as exc:  # pylint: disable=broad-except
-            self.logger.exception(
-                "inspect.unexpected_error",
-                inspect_url=inspect_url,
-                request_url=request_url,
-                headers=headers,
-                exc_info=exc,
-            )
-            return None
         finally:
-            if self.request_delay > 0:
-                await asyncio.sleep(self.request_delay)
+            await page.close()
 
-        item_info = data.get("iteminfo") or {}
-        if not item_info:
-            self.logger.warning(
-                "inspect.missing_iteminfo",
-                inspect_url=inspect_url,
-                response=data,
-            )
-            return None
+    @staticmethod
+    def _parse_float(text: str) -> float:
+        """Extract float value from text like '0.123456' or 'Float: 0.123456'"""
+        match = re.search(r"(\d+\.\d+)", text)
+        if not match:
+            raise ValueError(f"Could not parse float value from: {text}")
+        return float(match.group(1))
 
-        float_value = item_info.get("floatvalue")
-        if float_value is None:
-            self.logger.warning(
-                "inspect.missing_float",
-                inspect_url=inspect_url,
-                iteminfo=item_info,
-            )
-            return None
+    async def _extract_paint_seed(self, page) -> Optional[int]:
+        """Try to extract paint seed from the page"""
+        try:
+            # Look for text containing "Paint Seed" or "Seed"
+            seed_element = await page.query_selector("text=/paint seed|seed/i")
+            if seed_element:
+                seed_text = await seed_element.inner_text()
+                match = re.search(r"(\d+)", seed_text)
+                if match:
+                    return int(match.group(1))
+        except Exception:
+            pass
+        return None
 
-        stickers_raw = item_info.get("stickers") or []
-        stickers: List[Dict[str, Any]] = []
-        if isinstance(stickers_raw, list):
-            stickers = [sticker for sticker in stickers_raw if isinstance(sticker, dict)]
+    async def _extract_paint_index(self, page) -> Optional[int]:
+        """Try to extract paint index from the page"""
+        try:
+            # Look for text containing "Paint Index"
+            index_element = await page.query_selector("text=/paint index/i")
+            if index_element:
+                index_text = await index_element.inner_text()
+                match = re.search(r"(\d+)", index_text)
+                if match:
+                    return int(match.group(1))
+        except Exception:
+            pass
+        return None
 
-        result = InspectResult(
-            float_value=float(float_value),
-            paint_seed=_coerce_optional_int(item_info.get("paintseed")),
-            paint_index=_coerce_optional_int(item_info.get("paintindex")),
-            stickers=stickers,
-            wear_name=item_info.get("wear_name"),
-            custom_name=item_info.get("full_item_name"),
-            raw_iteminfo=item_info,
-        )
+    async def _extract_wear_name(self, page) -> Optional[str]:
+        """Try to extract wear name (Factory New, Minimal Wear, etc.)"""
+        try:
+            # Look for common wear tier names
+            wear_patterns = [
+                "Factory New",
+                "Minimal Wear",
+                "Field-Tested",
+                "Well-Worn",
+                "Battle-Scarred",
+            ]
+            for wear in wear_patterns:
+                element = await page.query_selector(f"text=/{wear}/i")
+                if element:
+                    return wear
+        except Exception:
+            pass
+        return None
 
-        self.logger.info(
-            "inspect.success",
-            inspect_url_fragment=inspect_url[-50:],
-            float_value=result.float_value,
-            paint_seed=result.paint_seed,
-        )
-        return result
+    async def _extract_stickers(self, page) -> list[Dict[str, Any]]:
+        """Try to extract sticker information from the page"""
+        try:
+            stickers = []
+            # CSFloat usually shows stickers with specific classes or patterns
+            # This is a best-effort extraction
+            sticker_elements = await page.query_selector_all(".sticker, [class*='sticker']")
+            for element in sticker_elements:
+                text = await element.inner_text()
+                if text:
+                    stickers.append({"name": text.strip()})
+            return stickers
+        except Exception:
+            pass
+        return []

@@ -7,23 +7,23 @@ services:
       POSTGRES_DB: steam
     volumes:
       - postgres-data:/var/lib/postgresql/data
+    networks:
+      - app-network
   redis:
     image: redis:7
     command: ["redis-server", "--save", "", "--appendonly", "no"]
+    networks:
+      - app-network
   api:
     build: .
     environment:
       DATABASE_URL: postgresql+psycopg://steam:steam@postgres/steam
       REDIS_URL: redis://redis:6379/0
       STEAM_CURRENCY_ID: 1
-      CSFLOAT_API_BASE_URL: https://api.csgofloat.com
-      FLOAT_API_TIMEOUT: 10
-      FLOAT_API_REQUEST_DELAY: 2
+      FLOAT_API_TIMEOUT: 300
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
       POLL_INTERVAL_S: 10
-      INSPECT_RPS_PER_ACCOUNT: 0.8
-      INSPECT_ACCOUNTS: 5
       COMBINED_FEE_RATE: 0.15
       COMBINED_FEE_MIN_CENTS: 1
     command: ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
@@ -32,6 +32,8 @@ services:
     depends_on:
       - postgres
       - redis
+    networks:
+      - app-network
   worker:
     build: .
     volumes:
@@ -40,21 +42,23 @@ services:
       DATABASE_URL: postgresql+psycopg://steam:steam@postgres/steam
       REDIS_URL: redis://redis:6379/0
       STEAM_CURRENCY_ID: 1
-      CSFLOAT_API_BASE_URL: https://api.csgofloat.com
-      FLOAT_API_TIMEOUT: 10
-      FLOAT_API_REQUEST_DELAY: 2
+      FLOAT_API_TIMEOUT: 300
       STEAM_HTML_DUMP_DIR: /data/html-dumps
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
       POLL_INTERVAL_S: 10
-      INSPECT_RPS_PER_ACCOUNT: 0.8
-      INSPECT_ACCOUNTS: 5
       COMBINED_FEE_RATE: 0.15
       COMBINED_FEE_MIN_CENTS: 1
     command: ["python", "-m", "src.worker.main"]
     depends_on:
       - postgres
       - redis
+    networks:
+      - app-network
 
 volumes:
   postgres-data:
+
+networks:
+  app-network:
+    driver: bridge

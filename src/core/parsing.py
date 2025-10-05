@@ -56,11 +56,6 @@ def _extract_urls(node: HTMLParser) -> tuple[Optional[str], Optional[str]]:
         if text and "inspect in game" in text.lower():
             href = anchor.attributes.get("href", "")
             if href.startswith("steam://"):
-                log.debug(
-                    "parsing.inspect.found_primary",
-                    href=href,
-                    text=text,
-                )
                 inspect_url = href
                 break
     if inspect_url is None:
@@ -70,21 +65,12 @@ def _extract_urls(node: HTMLParser) -> tuple[Optional[str], Optional[str]]:
                 continue
             href = anchor.attributes.get("href", "")
             if href.startswith("steam://"):
-                log.debug(
-                    "parsing.inspect.found_fallback",
-                    href=href,
-                    text=text,
-                )
                 inspect_url = href
                 break
     if inspect_url is None:
         inspect_button = node.css_first("a.market_action_menu_item")
         if inspect_button and "steam://" in inspect_button.attributes.get("href", ""):
             inspect_url = inspect_button.attributes["href"]
-            log.debug(
-                "parsing.inspect.found_menu_item",
-                href=inspect_url,
-            )
     if inspect_url is None:
         sample_anchors = []
         for anchor in node.css("a"):
@@ -101,8 +87,6 @@ def _extract_urls(node: HTMLParser) -> tuple[Optional[str], Optional[str]]:
             "parsing.inspect.not_found",
             anchor_samples=sample_anchors,
         )
-    else:
-        log.debug("parsing.inspect.selected", inspect_url=inspect_url)
     return inspect_url, listing_url
 
 
