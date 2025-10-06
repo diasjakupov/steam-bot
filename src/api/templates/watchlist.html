@@ -158,6 +158,22 @@
         background: rgba(148, 163, 184, 0.1);
       }
 
+      .float-excellent {
+        background: rgba(34, 197, 94, 0.2);
+        font-weight: 600;
+        color: #15803d;
+      }
+
+      .float-good {
+        background: rgba(250, 204, 21, 0.2);
+        font-weight: 600;
+        color: #854d0e;
+      }
+
+      .float-poor {
+        color: #64748b;
+      }
+
       .watch-card {
         gap: 1.25rem;
       }
@@ -205,7 +221,7 @@
       <p class="lead">
         Paste the Steam listing URL, optional float range, and your target resale price to add an item to the watchlist.
         Watches use Steam currency ID {{ default_currency }} and a default minimum profit of
-        ${{ "%.2f" | format(default_min_profit) }}.
+        ₸{{ "%.2f" | format(default_min_profit * usd_to_kzt) }}.
       </p>
 
       {% if status_message %}
@@ -228,25 +244,24 @@
       </section>
 
       <section class="card">
-        <h2>Inspect history</h2>
+        <h2>Inspect history (Matching ranges)</h2>
         {% if inspect_history %}
-        <div class="hint">Showing the 50 most recent cached inspections.</div>
+        <div class="hint">Showing items that match their watchlist float ranges, grouped by item.</div>
         <div style="overflow-x: auto;">
           <table>
             <thead>
               <tr>
-                <th>Last inspected</th>
                 <th>Item</th>
                 <th>Float</th>
                 <th>Paint seed</th>
+                <th>Last inspected</th>
                 <th>Inspect URL</th>
               </tr>
             </thead>
             <tbody>
               {% for entry in inspect_history %}
-              <tr>
-                <td>{{ entry.last_inspected or '—' }}</td>
-                <td>{{ entry.watch_name or 'Unknown watch' }}</td>
+              <tr class="{% if entry.float_value is not none %}{% if entry.float_value <= 0.20 %}float-excellent{% elif entry.float_value <= 0.30 %}float-good{% else %}float-poor{% endif %}{% endif %}">
+                <td><strong>{{ entry.watch_name or 'Unknown watch' }}</strong></td>
                 <td>
                   {% if entry.float_value is not none %}
                   {{ "%.6f" | format(entry.float_value) }}
@@ -255,6 +270,7 @@
                   {% endif %}
                 </td>
                 <td>{{ entry.paint_seed if entry.paint_seed is not none else '—' }}</td>
+                <td style="font-size: 0.85rem; color: #64748b;">{{ entry.last_inspected or '—' }}</td>
                 <td style="font-size: 0.8rem;">
                   <a href="{{ entry.inspect_url }}" target="_blank" rel="noopener">Open</a>
                 </td>
@@ -285,11 +301,11 @@
               <input type="number" step="0.0001" min="0" max="1" name="float_max" placeholder="0.15" />
             </label>
             <label>
-              Target resale price (USD)
-              <input type="number" step="0.01" min="0" name="target_resale_usd" placeholder="200.00" required />
+              Target resale price (KZT)
+              <input type="number" step="1" min="0" name="target_resale_usd" placeholder="{{ "%.0f" | format(200 * usd_to_kzt) }}" required />
             </label>
           </div>
-          <p class="hint">Min profit defaults to ${{ "%.2f" | format(default_min_profit) }} for alerts.</p>
+          <p class="hint">Min profit defaults to ₸{{ "%.0f" | format(default_min_profit * usd_to_kzt) }} for alerts. (1 USD ≈ {{ "%.2f" | format(usd_to_kzt) }} KZT)</p>
           <button type="submit">Add watch</button>
         </form>
       </section>
@@ -321,7 +337,7 @@
                 {% else %}
                 any
                 {% endif %}
-                · Target resale ${{ "%.2f" | format(watch.rules.target_resale_usd) }}
+                · Target resale ₸{{ "%.0f" | format(watch.rules.target_resale_usd * usd_to_kzt) }}
               </div>
             </div>
 
@@ -354,20 +370,20 @@
                   />
                 </label>
                 <label>
-                  Target resale price (USD)
+                  Target resale price (KZT)
                   <input
                     type="number"
-                    step="0.01"
+                    step="1"
                     min="0"
                     name="target_resale_usd"
-                    value="{{ "%.2f" | format(watch.rules.target_resale_usd) }}"
+                    value="{{ "%.0f" | format(watch.rules.target_resale_usd * usd_to_kzt) }}"
                     required
                   />
                 </label>
               </div>
               <button type="submit">Update watch</button>
               <p class="hint">
-                Minimum profit: ${{ "%.2f" | format(watch.rules.min_profit_usd) }} · Stickers/seed filters preserved from API edits.
+                Minimum profit: ₸{{ "%.0f" | format(watch.rules.min_profit_usd * usd_to_kzt) }} · Stickers/seed filters preserved from API edits.
               </p>
             </form>
             <form

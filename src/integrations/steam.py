@@ -43,19 +43,8 @@ class SteamClient:
         timeout: float = 30.0,
         browser: str = "chromium",
         page_fetcher: Optional[PageFetcher] = None,
-        html_dump_dir: str | Path | None = None,
     ) -> None:
         self.settings = get_settings()
-        dump_dir_setting = (
-            html_dump_dir
-            if html_dump_dir is not None
-            else self.settings.steam_html_dump_dir
-        )
-        self._html_dump_dir = (
-            Path(dump_dir_setting).expanduser()
-            if dump_dir_setting
-            else None
-        )
         self.logger = structlog.get_logger(__name__)
         self.client = httpx.AsyncClient(
             timeout=timeout, headers={"User-Agent": "cs2-market-watcher/1.0"}
@@ -101,9 +90,7 @@ class SteamClient:
             await self._playwright.stop()
             self._playwright = None
 
-    async def _fetch_page_content(
-        self, url: str, *, dump_name: str | None = None
-    ) -> str:
+    async def _fetch_page_content(self, url: str) -> str:
         if self._page_fetcher is not None:
             html = await self._page_fetcher(url)
             return html
@@ -142,11 +129,6 @@ class SteamClient:
         finally:
             await page.close()
 
-    @staticmethod
-    def _sanitize_dump_name(label: str) -> str:
-        slug = re.sub(r"[^A-Za-z0-9._-]+", "_", label).strip("_")
-        return slug[:80] or "listing"
-
     async def price_overview(self, appid: int, market_hash_name: str) -> PriceOverview:
         params = {
             "appid": appid,
@@ -170,8 +152,7 @@ class SteamClient:
             f"https://steamcommunity.com/market/listings/{appid}/{encoded_name}?count={count}"
             f"&currency={self.settings.steam_currency_id}"
         )
-        dump_name = f"{appid}-{market_hash_name}"
-        page_html = await self._fetch_page_content(url, dump_name=dump_name)
+        page_html = await self._fetch_page_content(url)
         return list(parse_results_html(page_html))
 
 

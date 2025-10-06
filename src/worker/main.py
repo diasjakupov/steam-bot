@@ -38,29 +38,20 @@ async def evaluate_and_alert(
     rules = watch.rules
     float_value = inspect_data.get("float_value")
     if float_value is None:
-        logger.debug("Skipping item without float value", price_cents=listing.price_cents)
         return
-        
-    logger.info("Evaluating item for alerts", 
-               price_cents=listing.price_cents,
-               float_value=float_value,
-               market_hash_name=watch.market_hash_name)
-    
+
     float_min = rules.get("float_min")
     float_max = rules.get("float_max")
     if float_min is not None and float_value < float_min:
-        logger.debug("Item below float minimum", float_value=float_value, float_min=float_min)
         return
     if float_max is not None and float_value > float_max:
-        logger.debug("Item above float maximum", float_value=float_value, float_max=float_max)
         return
-        
+
     seed_whitelist = rules.get("seed_whitelist")
     paint_seed = inspect_data.get("paint_seed")
     if seed_whitelist and paint_seed not in seed_whitelist:
-        logger.debug("Item seed not in whitelist", paint_seed=paint_seed, seed_whitelist=seed_whitelist)
         return
-        
+
     sticker_any = rules.get("sticker_any") or []
     stickers_data = inspect_data.get("stickers", []) or []
     sticker_list = [s.get("name") for s in stickers_data if s.get("name")]
@@ -68,11 +59,8 @@ async def evaluate_and_alert(
     if sticker_any:
         sticker_names = set(sticker_list)
         if not sticker_names.intersection(sticker_any):
-            logger.debug("Item stickers don't match requirements", 
-                        stickers=sticker_list, 
-                        required_stickers=sticker_any)
             return
-            
+
     inputs = ProfitInputs(
         target_resale_usd=rules["target_resale_usd"],
         min_profit_usd=rules["min_profit_usd"],
@@ -80,10 +68,6 @@ async def evaluate_and_alert(
         combined_fee_min_cents=get_settings().combined_fee_min_cents,
     )
     if not is_profitable(listing.price_cents, inputs):
-        logger.debug("Item not profitable", 
-                    price_cents=listing.price_cents,
-                    target_resale=rules["target_resale_usd"],
-                    min_profit=rules["min_profit_usd"])
         return
         
     logger.info("🚨 PROFITABLE ITEM FOUND! Sending alert", 
@@ -146,11 +130,6 @@ async def process_watch(
         snapshot = existing.scalar_one_or_none()
         if snapshot is not None:
             if snapshot.inspected:
-                logger.debug(
-                    "Skipping listing already inspected",
-                    listing_key=parsed.listing_key,
-                    price_cents=parsed.price_cents,
-                )
                 continue
             logger.info(
                 "Reprocessing existing listing without inspect data",
@@ -178,9 +157,8 @@ async def process_watch(
             )
             session.add(snapshot)
             await session.flush()
-        
+
         if not parsed.inspect_url:
-            logger.debug("Skipping listing without inspect URL", price_cents=parsed.price_cents)
             continue
         
         cached_history = None

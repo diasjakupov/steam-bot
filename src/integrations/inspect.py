@@ -100,17 +100,8 @@ class InspectClient:
         try:
             logger.info("Navigating to CSFloat checker", inspect_url=inspect_url)
             await page.goto("https://csfloat.com/checker")
-
-            # Wait 5 seconds for page to load
-            logger.debug("Waiting 5 seconds for page to load")
             await page.wait_for_timeout(5000)
-
-            # Fill in the inspect URL
-            logger.debug("Filling inspect URL into input field")
             await page.fill("#mat-input-0", inspect_url)
-
-            # Wait 5 seconds for results to load
-            logger.debug("Waiting 5 seconds for results to load")
             await page.wait_for_timeout(5000)
 
             # Check if float div appeared (correct class: mat-mdc-tooltip-trigger wear)

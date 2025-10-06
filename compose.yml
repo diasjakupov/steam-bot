@@ -36,14 +36,11 @@ services:
       - app-network
   worker:
     build: .
-    volumes:
-      - ./html-dumps:/data/html-dumps
     environment:
       DATABASE_URL: postgresql+psycopg://steam:steam@postgres/steam
       REDIS_URL: redis://redis:6379/0
       STEAM_CURRENCY_ID: 1
       FLOAT_API_TIMEOUT: 300
-      STEAM_HTML_DUMP_DIR: /data/html-dumps
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
       POLL_INTERVAL_S: 10
