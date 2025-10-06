@@ -1,0 +1,14 @@
+{
+  "name": "cs2bot-inspect-service",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local CSFloat inspect service wrapper for cs2bot",
+  "scripts": {
+    "start": "node start.js",
+    "start:dev": "node start.js"
+  },
+  "dependencies": {
+    "csgofloat": "^4.0.0",
+    "dotenv": "^16.4.5"
+  }
+}

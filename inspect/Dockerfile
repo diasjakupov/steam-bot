@@ -1,12 +1,13 @@
-FROM node:18-bullseye-slim
+FROM node:20-alpine AS base
 
-ENV NODE_ENV=production
 WORKDIR /app
 
-COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 
-RUN npm install --omit=dev csgofloat \
-    && chmod +x /usr/local/bin/docker-entrypoint.sh
+COPY config.js ./config.js
+COPY start.js ./start.js
 
-ENTRYPOINT ["docker-entrypoint.sh"]
-CMD ["node", "node_modules/csgofloat/index.js"]
+EXPOSE 5000
+
+CMD ["npm", "start"]

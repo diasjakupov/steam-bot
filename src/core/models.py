@@ -51,3 +51,14 @@ class Alert(Base):
 
     snapshot: Mapped[ListingSnapshot] = relationship(back_populates="alerts")
 
+
+class InspectHistory(Base):
+    __tablename__ = "inspect_history"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    inspect_url: Mapped[str] = mapped_column(Text, unique=True)
+    result: Mapped[Dict[str, Any]] = mapped_column(JSON)
+    last_inspected: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    watchlist_id: Mapped[Optional[int]] = mapped_column(ForeignKey("watchlist.id"), nullable=True)
+
+    watchlist: Mapped[Optional[Watchlist]] = relationship()

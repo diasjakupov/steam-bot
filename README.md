@@ -1,13 +1,13 @@
 # CS2 Read-only Market Watcher
 
-This project provides a read-only monitoring service for Counter-Strike 2 Steam Community Market listings. It polls the first page of each watched item, enriches listings with float data from a self-hosted CSFloat Inspect deployment, evaluates user-defined profit rules, and sends Telegram alerts for profitable opportunities.
+This project provides a read-only monitoring service for Counter-Strike 2 Steam Community Market listings. It polls the first page of each watched item, enriches listings with float data using a local inspect service powered by the csfloat/inspect project, evaluates user-defined profit rules, and sends Telegram alerts for profitable opportunities.
 
 ## Features
 
 - FastAPI control API for managing watchlist entries and health checks.
 - Async worker that fetches Steam listing page 1, parses listings, inspects skins, and applies rule filters.
 - Postgres persistence for watchlist entries, listing snapshots, and alert audit trail.
-- Redis-backed rate limits and deduplication to respect Steam and Inspect service constraints.
+- Redis-backed rate limits and deduplication to respect Steam and inspect service constraints.
 - Telegram notifications with Markdown-formatted summaries.
 
 ## Architecture Overview
@@ -19,14 +19,16 @@ This project provides a read-only monitoring service for Counter-Strike 2 Steam 
 +-------------+        +-----------+        +-----------+
         ^                     ^                    ^
         |                     |                    |
-        |               +-----------+        +-----------+
-        +---------------|  Worker   |------->| Inspect   |
-                        +-----------+        +-----------+
-                                 \
-                                  \-> Steam Community Market
+        |               +-----------+              |
+        +---------------|  Worker   |--------------+
+                        +-----------+
+                                 |
+                                 v
+                     Steam Community Market
+                        CSFloat Checker
 ```
 
-The worker uses configurable jitter and Redis token buckets to avoid overloading external services. Listing parsing is performed with `selectolax`. The inspect stage retrieves float, seed, and sticker metadata before evaluating user rules.
+The worker uses configurable jitter and Redis token buckets to avoid overloading external services. Listing parsing is performed with `selectolax`. The inspect stage uses Playwright to automate the CSFloat checker website (https://csfloat.com/checker) to retrieve float, seed, and sticker metadata before evaluating user rules.
 
 ## Quick Start
 
@@ -43,12 +45,11 @@ Copy `.env.example` to `.env` and fill in required secrets.
 DATABASE_URL=postgresql+psycopg://steam:steam@postgres/steam
 REDIS_URL=redis://redis:6379/0
 STEAM_CURRENCY_ID=1
-INSPECT_BASE_URL=http://inspect:5000
+FLOAT_API_TIMEOUT=30
+STEAM_HTML_DUMP_DIR=./html-dumps
 TELEGRAM_BOT_TOKEN=replace-me
 TELEGRAM_CHAT_ID=replace-me
 POLL_INTERVAL_S=10
-INSPECT_RPS_PER_ACCOUNT=0.8
-INSPECT_ACCOUNTS=5
 COMBINED_FEE_RATE=0.15
 COMBINED_FEE_MIN_CENTS=1
 ADMIN_DEFAULT_MIN_PROFIT_USD=0.0
@@ -56,23 +57,18 @@ ADMIN_DEFAULT_MIN_PROFIT_USD=0.0
 
 `ADMIN_DEFAULT_MIN_PROFIT_USD` controls the minimum profit automatically applied when you create watches through the web admin.
 
+The worker uses Playwright to automate the public CSFloat checker website (https://csfloat.com/checker) for retrieving item float values and metadata. Inspect requests are rate-limited to 0.25 RPS (one request every 4 seconds) to respect CSFloat's service.
+
+Set `STEAM_HTML_DUMP_DIR` to a writable path if you want the worker to persist the fully rendered Steam listing HTML for debugging. Each fetch writes a timestamped snapshot in that directory.
+The default Docker Compose setup mounts `./html-dumps` into the worker container and wires the environment variable so you can inspect saved pages on the host while tailing `docker compose logs`.
+
 ### Docker Compose
 
 ```
 docker compose up --build
 ```
 
-This command starts Postgres, Redis, a manually-provisioned CSFloat Inspect container, the FastAPI control API, and the worker process. The API is exposed on port 8000.
-
-> **Inspect configuration**
->
-> 1. Copy `inspect/config.example.js` to `inspect/config.js`.
-> 2. Install dependencies in the `inspect/` directory with `npm install csgofloat` (this happens automatically during `docker compose build`, but you can run it manually for local testing).
-> 3. Fill in at least one Steam bot account inside the `logins` array (account name, password, and optional Steam Guard secrets) plus any Inspect tuning you require. The container will refuse to start without this file.
-> 4. If you enable Inspect's Postgres cache, make sure the referenced database is reachable from the container.
-> 5. After the container boots, visit the Inspect API host in your browser to complete the initial Steam Guard login for each bot as described in the upstream docs.
-
-The Inspect service image installs the published `csgofloat` package via `npm install` during the Docker build. At runtime it runs `node node_modules/csgofloat/index.js`, so the workflow matches the manual setup: install dependencies, provide a `config.js`, and start the server. On first launch, open the Inspect API in a browser and follow its login prompts to authorize each bot account.
+This command starts Postgres, Redis, the FastAPI control API, and the worker process. The API is exposed on port 8000.
 
 ### Database Migrations
 
@@ -108,7 +104,6 @@ pytest
 
 ## References
 
-- CSFloat Inspect deployment guidance (Node.js requirements, Postgres caching, multi-account support). [GitHub](https://github.com/Step7750/CSGOFloat)
 - CSFloat API response fields. [CSFloat Docs](https://docs.csfloat.com/)
 - Steam Community Market priceoverview usage. [Stack Overflow](https://stackoverflow.com/questions/18921471/steam-market-price-history-json)
 - Steam Community Market render endpoint details. [Steam Community](https://steamcommunity.com/)
@@ -118,6 +113,5 @@ pytest
 
 - The service is read-only: it never attempts to place orders or buy items.
 - Rate limits and exponential backoff guard against throttling.
-- Secrets (Steam accounts for Inspect, Telegram token) must be provided via environment variables or external secret stores.
+- Secrets (Telegram token and any optional overrides) must be provided via environment variables or external secret stores.
 - Do not commit Steam credentials or Telegram tokens to source control.
-

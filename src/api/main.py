@@ -11,18 +11,30 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from redis.asyncio import Redis
 
 from ..core.config import get_settings
 from ..core.db import get_session, init_models
-from ..core.models import Watchlist
+from ..core.models import InspectHistory, Watchlist
 
 app = FastAPI(title="CS2 Market Watcher")
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+redis_client: Redis | None = None
+WORKER_STATE_KEY = "worker:enabled"
 
 
 @app.on_event("startup")
 async def _startup() -> None:
     await init_models()
+    acquire_redis_client()
+
+
+@app.on_event("shutdown")
+async def _shutdown() -> None:
+    global redis_client
+    if redis_client is not None:
+        await redis_client.aclose()
+        redis_client = None
 
 
 class RuleConfig(BaseModel):
@@ -111,7 +123,17 @@ STATUS_MESSAGES = {
     "deleted": "Watch removed successfully.",
     "not_found": "Requested watch could not be found.",
     "error": "Unable to process form submission.",
+    "worker_started": "Worker resumed.",
+    "worker_stopped": "Worker paused.",
 }
+
+
+def acquire_redis_client() -> Redis | None:
+    global redis_client
+    if redis_client is None:
+        settings = get_settings()
+        redis_client = Redis.from_url(str(settings.redis_url))
+    return redis_client
 
 
 def parse_optional_float(value: str | None) -> float | None:
@@ -173,6 +195,33 @@ async def admin_watchlist(
     status_key = request.query_params.get("status")
     message = STATUS_MESSAGES.get(status_key or "")
     settings = get_settings()
+    worker_enabled = True
+    client = acquire_redis_client()
+    if client is not None:
+        value = await client.get(WORKER_STATE_KEY)
+        worker_enabled = value is None or value != b"0"
+    history_stmt = (
+        select(InspectHistory)
+        .order_by(InspectHistory.last_inspected.desc())
+        .limit(50)
+    )
+    history_rows = await session.execute(history_stmt)
+    history_models = history_rows.scalars().unique().all()
+    history_payload: list[dict[str, Any]] = []
+    for entry in history_models:
+        result_data = entry.result or {}
+        history_payload.append(
+            {
+                "inspect_url": entry.inspect_url,
+                "float_value": result_data.get("float_value"),
+                "paint_seed": result_data.get("paint_seed"),
+                "paint_index": result_data.get("paint_index"),
+                "wear_name": result_data.get("wear_name"),
+                "stickers": result_data.get("stickers", []),
+                "last_inspected": entry.last_inspected.isoformat() if entry.last_inspected else None,
+                "watch_name": entry.watchlist.market_hash_name if entry.watchlist else None,
+            }
+        )
     return templates.TemplateResponse(
         "watchlist.html",
         {
@@ -181,8 +230,26 @@ async def admin_watchlist(
             "status_message": message,
             "default_currency": settings.steam_currency_id,
             "default_min_profit": settings.admin_default_min_profit_usd,
+            "worker_enabled": worker_enabled,
+            "inspect_history": history_payload,
         },
     )
+
+
+@app.post("/admin/worker/start", response_class=HTMLResponse)
+async def admin_start_worker() -> RedirectResponse:
+    client = acquire_redis_client()
+    if client is not None:
+        await client.set(WORKER_STATE_KEY, "1")
+    return RedirectResponse(url="/admin/watches?status=worker_started", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/admin/worker/stop", response_class=HTMLResponse)
+async def admin_stop_worker() -> RedirectResponse:
+    client = acquire_redis_client()
+    if client is not None:
+        await client.set(WORKER_STATE_KEY, "0")
+    return RedirectResponse(url="/admin/watches?status=worker_stopped", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/admin/watches", response_class=HTMLResponse)
@@ -268,4 +335,3 @@ async def admin_delete_watch(
         return RedirectResponse(url="/admin/watches?status=not_found", status_code=status.HTTP_303_SEE_OTHER)
     await session.delete(model)
     return RedirectResponse(url="/admin/watches?status=deleted", status_code=status.HTTP_303_SEE_OTHER)
-
