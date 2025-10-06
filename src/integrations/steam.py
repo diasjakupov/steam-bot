@@ -106,7 +106,6 @@ class SteamClient:
     ) -> str:
         if self._page_fetcher is not None:
             html = await self._page_fetcher(url)
-            self._maybe_dump_html(dump_name, html)
             return html
 
         await self._ensure_browser()
@@ -137,7 +136,6 @@ class SteamClient:
                 await asyncio.sleep(1.0)
                 await _navigate_once()
             html = await page.content()
-            self._maybe_dump_html(dump_name, html)
             return html
         except PlaywrightError as exc:  # pragma: no cover - network/runtime failures
             raise BrowserLaunchError("Failed to load listings page") from exc
@@ -148,23 +146,6 @@ class SteamClient:
     def _sanitize_dump_name(label: str) -> str:
         slug = re.sub(r"[^A-Za-z0-9._-]+", "_", label).strip("_")
         return slug[:80] or "listing"
-
-    def _maybe_dump_html(self, dump_name: str | None, html: str) -> None:
-        if not dump_name or not html or self._html_dump_dir is None:
-            return
-        try:
-            self._html_dump_dir.mkdir(parents=True, exist_ok=True)
-            slug = self._sanitize_dump_name(dump_name)
-            timestamp = int(time.time())
-            path = self._html_dump_dir / f"{slug}-{timestamp}.html"
-            path.write_text(html, encoding="utf-8")
-            self.logger.info("steam.html_dump_saved", path=str(path))
-        except Exception as exc:  # pragma: no cover - diagnostics only
-            self.logger.warning(
-                "steam.html_dump_failed",
-                dump_name=dump_name,
-                error=str(exc),
-            )
 
     async def price_overview(self, appid: int, market_hash_name: str) -> PriceOverview:
         params = {
