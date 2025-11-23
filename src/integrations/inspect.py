@@ -10,6 +10,7 @@ from playwright.async_api import (
     Browser,
     Error as PlaywrightError,
     Playwright,
+    Route,
     TimeoutError as PlaywrightTimeoutError,
     async_playwright,
 )
@@ -18,6 +19,14 @@ from ..core.config import get_settings
 
 
 logger = structlog.get_logger(__name__)
+
+
+async def _block_resources(route: Route) -> None:
+    """Block images, fonts, media, and stylesheets to reduce network traffic."""
+    if route.request.resource_type in ["image", "media", "font", "stylesheet"]:
+        await route.abort()
+    else:
+        await route.continue_()
 
 
 @dataclass
@@ -93,6 +102,7 @@ class InspectClient:
             raise RuntimeError("Browser is not initialized")
 
         page = await self._browser.new_page()
+        await page.route("**/*", _block_resources)
         timeout_ms = int(self._timeout * 1000)
         page.set_default_navigation_timeout(timeout_ms)
         page.set_default_timeout(timeout_ms)

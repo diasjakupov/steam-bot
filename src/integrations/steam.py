@@ -14,12 +14,21 @@ from playwright.async_api import (
     Browser,
     Error as PlaywrightError,
     Playwright,
+    Route,
     TimeoutError as PlaywrightTimeoutError,
     async_playwright,
 )
 
 from ..core.config import get_settings
 from ..core.parsing import ParsedListing, parse_results_html
+
+
+async def _block_resources(route: Route) -> None:
+    """Block images, fonts, media, and stylesheets to reduce network traffic."""
+    if route.request.resource_type in ["image", "media", "font", "stylesheet"]:
+        await route.abort()
+    else:
+        await route.continue_()
 
 
 @dataclass
@@ -100,6 +109,7 @@ class SteamClient:
             raise BrowserLaunchError("Browser is not initialized")
 
         page = await self._browser.new_page()
+        await page.route("**/*", _block_resources)
         timeout_ms = int(self._timeout * 1000)
         # These Playwright methods are synchronous in Python
         page.set_default_navigation_timeout(timeout_ms)
