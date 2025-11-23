@@ -6,16 +6,16 @@ This project provides a read-only monitoring service for Counter-Strike 2 Steam 
 
 - FastAPI control API for managing watchlist entries and health checks.
 - Async worker that fetches Steam listing page 1, parses listings, inspects skins, and applies rule filters.
-- Postgres persistence for watchlist entries, listing snapshots, and alert audit trail.
-- Redis-backed rate limits and deduplication to respect Steam and inspect service constraints.
+- SQLite database for watchlist entries, listing snapshots, alert audit trail, and worker state.
+- In-memory rate limiting to respect Steam and inspect service constraints.
 - Telegram notifications with Markdown-formatted summaries.
 
 ## Architecture Overview
 
 ```
 +-------------+        +-----------+        +-----------+
-|  FastAPI    |  -->   | Postgres  |  -->   | Telegram  |
-|  Control    |        | & Redis   |        | Alerts    |
+|  FastAPI    |  -->   |  SQLite   |  -->   | Telegram  |
+|  Control    |        |  Database |        | Alerts    |
 +-------------+        +-----------+        +-----------+
         ^                     ^                    ^
         |                     |                    |
@@ -28,7 +28,7 @@ This project provides a read-only monitoring service for Counter-Strike 2 Steam 
                         CSFloat Checker
 ```
 
-The worker uses configurable jitter and Redis token buckets to avoid overloading external services. Listing parsing is performed with `selectolax`. The inspect stage uses Playwright to automate the CSFloat checker website (https://csfloat.com/checker) to retrieve float, seed, and sticker metadata before evaluating user rules.
+The worker uses configurable jitter and in-memory token bucket rate limiting to avoid overloading external services. All data is stored in a single SQLite file, making deployment simple and portable. Listing parsing is performed with `selectolax`. The inspect stage uses Playwright to automate the CSFloat checker website (https://csfloat.com/checker) to retrieve float, seed, and sticker metadata before evaluating user rules.
 
 ## Quick Start
 
@@ -42,8 +42,7 @@ The worker uses configurable jitter and Redis token buckets to avoid overloading
 Copy `.env.example` to `.env` and fill in required secrets.
 
 ```
-DATABASE_URL=postgresql+psycopg://steam:steam@postgres/steam
-REDIS_URL=redis://redis:6379/0
+DATABASE_URL=sqlite+aiosqlite:////data/cs2bot.db
 STEAM_CURRENCY_ID=1
 FLOAT_API_TIMEOUT=30
 STEAM_HTML_DUMP_DIR=./html-dumps
@@ -68,12 +67,18 @@ The default Docker Compose setup mounts `./html-dumps` into the worker container
 docker compose up --build
 ```
 
-This command starts Postgres, Redis, the FastAPI control API, and the worker process. The API is exposed on port 8000.
+This command starts the FastAPI control API and the worker process. The API is exposed on port 8000. The SQLite database is automatically initialized on first run.
 
-### Database Migrations
+### Database Initialization
 
-```
-psql $DATABASE_URL -f migrations/001_init.sql
+The database is automatically created when services start. To manually initialize:
+
+```bash
+docker compose exec api python -c "
+import asyncio
+from src.core.db import init_models
+asyncio.run(init_models())
+"
 ```
 
 ### API Usage

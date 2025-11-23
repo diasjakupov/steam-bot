@@ -2,61 +2,57 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Optional
-
-from redis.asyncio import Redis
 
 
 class TokenBucket:
-    """Simple Redis-backed token bucket."""
+    """Simple in-memory token bucket rate limiter."""
 
-    def __init__(self, redis: Redis, key: str, capacity: float, refill_rate: float) -> None:
-        self.redis = redis
-        self.key = key
+    def __init__(self, capacity: float, refill_rate: float) -> None:
         self.capacity = capacity
         self.refill_rate = refill_rate
+        self.tokens = capacity
+        self.last_update = time.time()
 
     async def acquire(self, tokens: float = 1.0, timeout: float = 10.0) -> bool:
+        """
+        Acquire tokens from the bucket.
+
+        Args:
+            tokens: Number of tokens to acquire
+            timeout: Maximum time to wait for tokens
+
+        Returns:
+            True if tokens were acquired, False if timeout occurred
+        """
         deadline = time.monotonic() + timeout
         while True:
             now = time.time()
-            script = """
-local key = KEYS[1]
-local capacity = tonumber(ARGV[1])
-local refill = tonumber(ARGV[2])
-local now = tonumber(ARGV[3])
-local tokens = tonumber(ARGV[4])
-local ttl = tonumber(ARGV[5])
-local bucket = redis.call('HMGET', key, 'tokens', 'timestamp')
-local current = tonumber(bucket[1])
-local timestamp = tonumber(bucket[2])
-if not current then
-  current = capacity
-  timestamp = now
-end
-local delta = math.max(0, now - timestamp)
-current = math.min(capacity, current + delta * refill)
-if current < tokens then
-  redis.call('HMSET', key, 'tokens', current, 'timestamp', now)
-  redis.call('EXPIRE', key, ttl)
-  return current
-else
-  current = current - tokens
-  redis.call('HMSET', key, 'tokens', current, 'timestamp', now)
-  redis.call('EXPIRE', key, ttl)
-  return current + tokens
-end
-"""
-            ttl = max(5, int(self.capacity / max(self.refill_rate, 0.01)))
-            remaining = await self.redis.eval(script, 1, self.key, self.capacity, self.refill_rate, now, tokens, ttl)
-            if remaining is not None and remaining >= tokens:
+            # Refill tokens based on elapsed time
+            elapsed = now - self.last_update
+            self.tokens = min(self.capacity, self.tokens + elapsed * self.refill_rate)
+            self.last_update = now
+
+            if self.tokens >= tokens:
+                self.tokens -= tokens
                 return True
+
             if time.monotonic() > deadline:
                 return False
+
+            # Wait before trying again
             await asyncio.sleep(1 / max(self.refill_rate, 1.0))
 
 
-async def build_bucket(redis: Redis, key: str, rps: float) -> TokenBucket:
+def build_bucket(rps: float) -> TokenBucket:
+    """
+    Build a token bucket with the given requests per second rate.
+
+    Args:
+        rps: Requests per second (refill rate)
+
+    Returns:
+        Configured TokenBucket instance
+    """
     capacity = max(1.0, rps * 2)
-    return TokenBucket(redis, key, capacity=capacity, refill_rate=rps)
+    return TokenBucket(capacity=capacity, refill_rate=rps)
 

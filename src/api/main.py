@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any, List
 from urllib.parse import unquote, urlparse
@@ -11,31 +12,19 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from redis.asyncio import Redis
 
 from ..core.config import get_settings
 from ..core.db import get_session, init_models
 from ..core.forex import get_usd_to_kzt_rate
-from ..core.models import InspectHistory, Watchlist
+from ..core.models import InspectHistory, Watchlist, WorkerSettings
 
 app = FastAPI(title="CS2 Market Watcher")
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
-redis_client: Redis | None = None
-WORKER_STATE_KEY = "worker:enabled"
 
 
 @app.on_event("startup")
 async def _startup() -> None:
     await init_models()
-    acquire_redis_client()
-
-
-@app.on_event("shutdown")
-async def _shutdown() -> None:
-    global redis_client
-    if redis_client is not None:
-        await redis_client.aclose()
-        redis_client = None
 
 
 class RuleConfig(BaseModel):
@@ -129,14 +118,6 @@ STATUS_MESSAGES = {
 }
 
 
-def acquire_redis_client() -> Redis | None:
-    global redis_client
-    if redis_client is None:
-        settings = get_settings()
-        redis_client = Redis.from_url(str(settings.redis_url))
-    return redis_client
-
-
 def parse_optional_float(value: str | None) -> float | None:
     if value is None:
         return None
@@ -196,14 +177,14 @@ async def admin_watchlist(
     status_key = request.query_params.get("status")
     message = STATUS_MESSAGES.get(status_key or "")
     settings = get_settings()
-    worker_enabled = True
-    client = acquire_redis_client()
-    if client is not None:
-        value = await client.get(WORKER_STATE_KEY)
-        worker_enabled = value is None or value != b"0"
 
-    # Get current USD to KZT exchange rate
-    usd_to_kzt = await get_usd_to_kzt_rate(client)
+    # Get worker status from database
+    worker_result = await session.execute(select(WorkerSettings).where(WorkerSettings.id == 1))
+    worker_settings = worker_result.scalar_one_or_none()
+    worker_enabled = worker_settings.enabled if worker_settings else True
+
+    # Get current USD to KZT exchange rate (pass None since Redis is removed)
+    usd_to_kzt = await get_usd_to_kzt_rate(None)
     history_stmt = (
         select(InspectHistory)
         .order_by(InspectHistory.last_inspected.desc())
@@ -262,18 +243,30 @@ async def admin_watchlist(
 
 
 @app.post("/admin/worker/start", response_class=HTMLResponse)
-async def admin_start_worker() -> RedirectResponse:
-    client = acquire_redis_client()
-    if client is not None:
-        await client.set(WORKER_STATE_KEY, "1")
+async def admin_start_worker(session: AsyncSession = Depends(get_session)) -> RedirectResponse:
+    result = await session.execute(select(WorkerSettings).where(WorkerSettings.id == 1))
+    settings = result.scalar_one_or_none()
+    if settings is None:
+        settings = WorkerSettings(id=1, enabled=True)
+        session.add(settings)
+    else:
+        settings.enabled = True
+        settings.updated_at = datetime.utcnow()
+    await session.commit()
     return RedirectResponse(url="/admin/watches?status=worker_started", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/admin/worker/stop", response_class=HTMLResponse)
-async def admin_stop_worker() -> RedirectResponse:
-    client = acquire_redis_client()
-    if client is not None:
-        await client.set(WORKER_STATE_KEY, "0")
+async def admin_stop_worker(session: AsyncSession = Depends(get_session)) -> RedirectResponse:
+    result = await session.execute(select(WorkerSettings).where(WorkerSettings.id == 1))
+    settings = result.scalar_one_or_none()
+    if settings is None:
+        settings = WorkerSettings(id=1, enabled=False)
+        session.add(settings)
+    else:
+        settings.enabled = False
+        settings.updated_at = datetime.utcnow()
+    await session.commit()
     return RedirectResponse(url="/admin/watches?status=worker_stopped", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -286,11 +279,10 @@ async def admin_create_watch(
     session: AsyncSession = Depends(get_session),
 ) -> RedirectResponse:
     settings = get_settings()
-    client = acquire_redis_client()
     try:
         appid, market_hash_name = extract_listing_details(url)
         # Convert KZT to USD using current exchange rate
-        usd_to_kzt = await get_usd_to_kzt_rate(client)
+        usd_to_kzt = await get_usd_to_kzt_rate(None)
         target_resale_kzt = float(target_resale_usd)
         target_resale_usd_converted = target_resale_kzt / usd_to_kzt
 
@@ -331,7 +323,6 @@ async def admin_update_watch(
         return RedirectResponse(url="/admin/watches?status=not_found", status_code=status.HTTP_303_SEE_OTHER)
 
     settings = get_settings()
-    client = acquire_redis_client()
     existing_rules = model.rules or {}
     try:
         appid, market_hash_name = extract_listing_details(url)
@@ -340,7 +331,7 @@ async def admin_update_watch(
             min_profit_value = settings.admin_default_min_profit_usd
 
         # Convert KZT to USD using current exchange rate
-        usd_to_kzt = await get_usd_to_kzt_rate(client)
+        usd_to_kzt = await get_usd_to_kzt_rate(None)
         target_resale_kzt = float(target_resale_usd)
         target_resale_usd_converted = target_resale_kzt / usd_to_kzt
 

@@ -59,6 +59,14 @@ class InspectHistory(Base):
     inspect_url: Mapped[str] = mapped_column(Text, unique=True)
     result: Mapped[Dict[str, Any]] = mapped_column(JSON)
     last_inspected: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
-    watchlist_id: Mapped[Optional[int]] = mapped_column(ForeignKey("watchlist.id"), nullable=True)
+    watchlist_id: Mapped[Optional[int]] = mapped_column(ForeignKey("watchlist.id", ondelete="CASCADE"), nullable=True)
 
     watchlist: Mapped[Optional[Watchlist]] = relationship()
+
+
+class WorkerSettings(Base):
+    __tablename__ = "worker_settings"
+
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)

@@ -1,11 +1,15 @@
 """
-Forex exchange rate utilities with Redis caching.
+Forex exchange rate utilities with optional Redis caching.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import structlog
 from forex_python.converter import CurrencyRates
-from redis.asyncio import Redis
+
+if TYPE_CHECKING:
+    from redis.asyncio import Redis
 
 logger = structlog.get_logger(__name__)
 
@@ -14,9 +18,12 @@ FOREX_CACHE_TTL = 3600  # Cache for 1 hour
 FALLBACK_RATE = 470.0  # Fallback rate if API fails
 
 
-async def get_usd_to_kzt_rate(redis: Redis | None = None) -> float:
+async def get_usd_to_kzt_rate(redis: "Redis | None" = None) -> float:
     """
-    Get USD to KZT exchange rate with Redis caching.
+    Get USD to KZT exchange rate with optional Redis caching.
+
+    Args:
+        redis: Optional Redis client for caching. If None, caching is skipped.
 
     Returns:
         Exchange rate (how many KZT for 1 USD)
