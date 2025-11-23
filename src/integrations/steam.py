@@ -24,8 +24,8 @@ from ..core.parsing import ParsedListing, parse_results_html
 
 
 async def _block_resources(route: Route) -> None:
-    """Block images, fonts, media, and stylesheets to reduce network traffic."""
-    if route.request.resource_type in ["image", "media", "font", "stylesheet"]:
+    """Block images, fonts, media, stylesheets, and other unnecessary resources to reduce network traffic."""
+    if route.request.resource_type in ["image", "media", "font", "stylesheet", "websocket", "manifest", "other"]:
         await route.abort()
     else:
         await route.continue_()
@@ -85,7 +85,7 @@ class SteamClient:
                 # In many container environments, Chromium must be launched without sandbox
                 self._browser = await launcher.launch(
                     headless=True,
-                    args=["--no-sandbox", "--disable-dev-shm-usage"],
+                    args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
                 )
             except (PlaywrightError, OSError) as exc:  # pragma: no cover - defensive
                 await self._cleanup_playwright()

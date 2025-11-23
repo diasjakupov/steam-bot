@@ -22,8 +22,8 @@ logger = structlog.get_logger(__name__)
 
 
 async def _block_resources(route: Route) -> None:
-    """Block images, fonts, media, and stylesheets to reduce network traffic."""
-    if route.request.resource_type in ["image", "media", "font", "stylesheet"]:
+    """Block images, fonts, media, stylesheets, and other unnecessary resources to reduce network traffic."""
+    if route.request.resource_type in ["image", "media", "font", "stylesheet", "websocket", "manifest", "other"]:
         await route.abort()
     else:
         await route.continue_()
@@ -60,7 +60,7 @@ class InspectClient:
             try:
                 self._browser = await self._playwright.chromium.launch(
                     headless=True,
-                    args=["--no-sandbox", "--disable-dev-shm-usage"],
+                    args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
                 )
             except (PlaywrightError, OSError) as exc:
                 await self._cleanup_playwright()
