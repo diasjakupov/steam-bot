@@ -7,11 +7,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    database_url: AnyUrl = Field(alias="DATABASE_URL")
-    redis_url: AnyUrl = Field(alias="REDIS_URL")
+    database_url: str = Field(alias="DATABASE_URL")  # Changed from AnyUrl to str for SQLite compatibility
     steam_currency_id: int = Field(default=1, alias="STEAM_CURRENCY_ID")
     float_api_timeout: float = Field(default=30.0, alias="FLOAT_API_TIMEOUT")
-    steam_html_dump_dir: str | None = Field(default=None, alias="STEAM_HTML_DUMP_DIR")
     telegram_bot_token: str = Field(alias="TELEGRAM_BOT_TOKEN")
     telegram_chat_id: str = Field(alias="TELEGRAM_CHAT_ID")
     poll_interval_s: float = Field(default=10.0, alias="POLL_INTERVAL_S")

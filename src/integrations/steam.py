@@ -14,12 +14,21 @@ from playwright.async_api import (
     Browser,
     Error as PlaywrightError,
     Playwright,
+    Route,
     TimeoutError as PlaywrightTimeoutError,
     async_playwright,
 )
 
 from ..core.config import get_settings
 from ..core.parsing import ParsedListing, parse_results_html
+
+
+async def _block_resources(route: Route) -> None:
+    """Block images, fonts, media, stylesheets, and other unnecessary resources to reduce network traffic."""
+    if route.request.resource_type in ["image", "media", "font", "stylesheet", "websocket", "manifest", "other"]:
+        await route.abort()
+    else:
+        await route.continue_()
 
 
 @dataclass
@@ -43,19 +52,8 @@ class SteamClient:
         timeout: float = 30.0,
         browser: str = "chromium",
         page_fetcher: Optional[PageFetcher] = None,
-        html_dump_dir: str | Path | None = None,
     ) -> None:
         self.settings = get_settings()
-        dump_dir_setting = (
-            html_dump_dir
-            if html_dump_dir is not None
-            else self.settings.steam_html_dump_dir
-        )
-        self._html_dump_dir = (
-            Path(dump_dir_setting).expanduser()
-            if dump_dir_setting
-            else None
-        )
         self.logger = structlog.get_logger(__name__)
         self.client = httpx.AsyncClient(
             timeout=timeout, headers={"User-Agent": "cs2-market-watcher/1.0"}
@@ -87,7 +85,7 @@ class SteamClient:
                 # In many container environments, Chromium must be launched without sandbox
                 self._browser = await launcher.launch(
                     headless=True,
-                    args=["--no-sandbox", "--disable-dev-shm-usage"],
+                    args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
                 )
             except (PlaywrightError, OSError) as exc:  # pragma: no cover - defensive
                 await self._cleanup_playwright()
@@ -101,9 +99,7 @@ class SteamClient:
             await self._playwright.stop()
             self._playwright = None
 
-    async def _fetch_page_content(
-        self, url: str, *, dump_name: str | None = None
-    ) -> str:
+    async def _fetch_page_content(self, url: str) -> str:
         if self._page_fetcher is not None:
             html = await self._page_fetcher(url)
             return html
@@ -113,6 +109,7 @@ class SteamClient:
             raise BrowserLaunchError("Browser is not initialized")
 
         page = await self._browser.new_page()
+        await page.route("**/*", _block_resources)
         timeout_ms = int(self._timeout * 1000)
         # These Playwright methods are synchronous in Python
         page.set_default_navigation_timeout(timeout_ms)
@@ -142,11 +139,6 @@ class SteamClient:
         finally:
             await page.close()
 
-    @staticmethod
-    def _sanitize_dump_name(label: str) -> str:
-        slug = re.sub(r"[^A-Za-z0-9._-]+", "_", label).strip("_")
-        return slug[:80] or "listing"
-
     async def price_overview(self, appid: int, market_hash_name: str) -> PriceOverview:
         params = {
             "appid": appid,
@@ -170,8 +162,7 @@ class SteamClient:
             f"https://steamcommunity.com/market/listings/{appid}/{encoded_name}?count={count}"
             f"&currency={self.settings.steam_currency_id}"
         )
-        dump_name = f"{appid}-{market_hash_name}"
-        page_html = await self._fetch_page_content(url, dump_name=dump_name)
+        page_html = await self._fetch_page_content(url)
         return list(parse_results_html(page_html))
 
 

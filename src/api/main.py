@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any, List
 from urllib.parse import unquote, urlparse
@@ -11,30 +12,19 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from redis.asyncio import Redis
 
 from ..core.config import get_settings
 from ..core.db import get_session, init_models
-from ..core.models import InspectHistory, Watchlist
+from ..core.forex import get_usd_to_kzt_rate
+from ..core.models import InspectHistory, Watchlist, WorkerSettings
 
 app = FastAPI(title="CS2 Market Watcher")
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
-redis_client: Redis | None = None
-WORKER_STATE_KEY = "worker:enabled"
 
 
 @app.on_event("startup")
 async def _startup() -> None:
     await init_models()
-    acquire_redis_client()
-
-
-@app.on_event("shutdown")
-async def _shutdown() -> None:
-    global redis_client
-    if redis_client is not None:
-        await redis_client.aclose()
-        redis_client = None
 
 
 class RuleConfig(BaseModel):
@@ -128,14 +118,6 @@ STATUS_MESSAGES = {
 }
 
 
-def acquire_redis_client() -> Redis | None:
-    global redis_client
-    if redis_client is None:
-        settings = get_settings()
-        redis_client = Redis.from_url(str(settings.redis_url))
-    return redis_client
-
-
 def parse_optional_float(value: str | None) -> float | None:
     if value is None:
         return None
@@ -195,33 +177,56 @@ async def admin_watchlist(
     status_key = request.query_params.get("status")
     message = STATUS_MESSAGES.get(status_key or "")
     settings = get_settings()
-    worker_enabled = True
-    client = acquire_redis_client()
-    if client is not None:
-        value = await client.get(WORKER_STATE_KEY)
-        worker_enabled = value is None or value != b"0"
+
+    # Get worker status from database
+    worker_result = await session.execute(select(WorkerSettings).where(WorkerSettings.id == 1))
+    worker_settings = worker_result.scalar_one_or_none()
+    worker_enabled = worker_settings.enabled if worker_settings else True
+
+    # Get current USD to KZT exchange rate (pass None since Redis is removed)
+    usd_to_kzt = await get_usd_to_kzt_rate(None)
     history_stmt = (
         select(InspectHistory)
         .order_by(InspectHistory.last_inspected.desc())
-        .limit(50)
+        .limit(100)
     )
     history_rows = await session.execute(history_stmt)
     history_models = history_rows.scalars().unique().all()
     history_payload: list[dict[str, Any]] = []
     for entry in history_models:
         result_data = entry.result or {}
-        history_payload.append(
-            {
-                "inspect_url": entry.inspect_url,
-                "float_value": result_data.get("float_value"),
-                "paint_seed": result_data.get("paint_seed"),
-                "paint_index": result_data.get("paint_index"),
-                "wear_name": result_data.get("wear_name"),
-                "stickers": result_data.get("stickers", []),
-                "last_inspected": entry.last_inspected.isoformat() if entry.last_inspected else None,
-                "watch_name": entry.watchlist.market_hash_name if entry.watchlist else None,
-            }
-        )
+        float_value = result_data.get("float_value")
+
+        # Skip if no float value
+        if float_value is None:
+            continue
+
+        # Only show items that match their watch's float range
+        if entry.watchlist:
+            rules = entry.watchlist.rules or {}
+            float_min = rules.get("float_min")
+            float_max = rules.get("float_max")
+
+            # Check if float is within the specified range
+            if float_min is not None and float_value < float_min:
+                continue
+            if float_max is not None and float_value > float_max:
+                continue
+
+            history_payload.append(
+                {
+                    "inspect_url": entry.inspect_url,
+                    "float_value": float_value,
+                    "paint_seed": result_data.get("paint_seed"),
+                    "paint_index": result_data.get("paint_index"),
+                    "wear_name": result_data.get("wear_name"),
+                    "stickers": result_data.get("stickers", []),
+                    "last_inspected": entry.last_inspected.isoformat() if entry.last_inspected else None,
+                    "watch_name": entry.watchlist.market_hash_name,
+                }
+            )
+    # Group by watch_name and sort by float_value
+    history_payload.sort(key=lambda x: (x["watch_name"] or "", x["float_value"] or 999))
     return templates.TemplateResponse(
         "watchlist.html",
         {
@@ -232,23 +237,36 @@ async def admin_watchlist(
             "default_min_profit": settings.admin_default_min_profit_usd,
             "worker_enabled": worker_enabled,
             "inspect_history": history_payload,
+            "usd_to_kzt": usd_to_kzt,
         },
     )
 
 
 @app.post("/admin/worker/start", response_class=HTMLResponse)
-async def admin_start_worker() -> RedirectResponse:
-    client = acquire_redis_client()
-    if client is not None:
-        await client.set(WORKER_STATE_KEY, "1")
+async def admin_start_worker(session: AsyncSession = Depends(get_session)) -> RedirectResponse:
+    result = await session.execute(select(WorkerSettings).where(WorkerSettings.id == 1))
+    settings = result.scalar_one_or_none()
+    if settings is None:
+        settings = WorkerSettings(id=1, enabled=True)
+        session.add(settings)
+    else:
+        settings.enabled = True
+        settings.updated_at = datetime.utcnow()
+    await session.commit()
     return RedirectResponse(url="/admin/watches?status=worker_started", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/admin/worker/stop", response_class=HTMLResponse)
-async def admin_stop_worker() -> RedirectResponse:
-    client = acquire_redis_client()
-    if client is not None:
-        await client.set(WORKER_STATE_KEY, "0")
+async def admin_stop_worker(session: AsyncSession = Depends(get_session)) -> RedirectResponse:
+    result = await session.execute(select(WorkerSettings).where(WorkerSettings.id == 1))
+    settings = result.scalar_one_or_none()
+    if settings is None:
+        settings = WorkerSettings(id=1, enabled=False)
+        session.add(settings)
+    else:
+        settings.enabled = False
+        settings.updated_at = datetime.utcnow()
+    await session.commit()
     return RedirectResponse(url="/admin/watches?status=worker_stopped", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -263,12 +281,17 @@ async def admin_create_watch(
     settings = get_settings()
     try:
         appid, market_hash_name = extract_listing_details(url)
+        # Convert KZT to USD using current exchange rate
+        usd_to_kzt = await get_usd_to_kzt_rate(None)
+        target_resale_kzt = float(target_resale_usd)
+        target_resale_usd_converted = target_resale_kzt / usd_to_kzt
+
         rules = RuleConfig(
             float_min=parse_optional_float(float_min),
             float_max=parse_optional_float(float_max),
             seed_whitelist=None,
             sticker_any=None,
-            target_resale_usd=float(target_resale_usd),
+            target_resale_usd=target_resale_usd_converted,
             min_profit_usd=settings.admin_default_min_profit_usd,
         )
     except Exception:
@@ -306,12 +329,18 @@ async def admin_update_watch(
         min_profit_value = existing_rules.get("min_profit_usd", settings.admin_default_min_profit_usd)
         if min_profit_value is None:
             min_profit_value = settings.admin_default_min_profit_usd
+
+        # Convert KZT to USD using current exchange rate
+        usd_to_kzt = await get_usd_to_kzt_rate(None)
+        target_resale_kzt = float(target_resale_usd)
+        target_resale_usd_converted = target_resale_kzt / usd_to_kzt
+
         rules = RuleConfig(
             float_min=parse_optional_float(float_min),
             float_max=parse_optional_float(float_max),
             seed_whitelist=existing_rules.get("seed_whitelist"),
             sticker_any=existing_rules.get("sticker_any"),
-            target_resale_usd=float(target_resale_usd),
+            target_resale_usd=target_resale_usd_converted,
             min_profit_usd=float(min_profit_value),
         )
     except Exception:

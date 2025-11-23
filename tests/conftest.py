@@ -13,8 +13,7 @@ from src.core import config as core_config
 @pytest.fixture(autouse=True)
 def default_env(monkeypatch):
     env = {
-        "DATABASE_URL": "postgresql+psycopg://user:pass@localhost/db",
-        "REDIS_URL": "redis://localhost:6379/0",
+        "DATABASE_URL": "sqlite+aiosqlite:///:memory:",
         "STEAM_CURRENCY_ID": "1",
         "FLOAT_API_TIMEOUT": "30",
         "TELEGRAM_BOT_TOKEN": "token",

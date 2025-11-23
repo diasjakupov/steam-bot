@@ -10,6 +10,7 @@ from playwright.async_api import (
     Browser,
     Error as PlaywrightError,
     Playwright,
+    Route,
     TimeoutError as PlaywrightTimeoutError,
     async_playwright,
 )
@@ -18,6 +19,14 @@ from ..core.config import get_settings
 
 
 logger = structlog.get_logger(__name__)
+
+
+async def _block_resources(route: Route) -> None:
+    """Block images, fonts, media, stylesheets, and other unnecessary resources to reduce network traffic."""
+    if route.request.resource_type in ["image", "media", "font", "stylesheet", "websocket", "manifest", "other"]:
+        await route.abort()
+    else:
+        await route.continue_()
 
 
 @dataclass
@@ -51,7 +60,7 @@ class InspectClient:
             try:
                 self._browser = await self._playwright.chromium.launch(
                     headless=True,
-                    args=["--no-sandbox", "--disable-dev-shm-usage"],
+                    args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
                 )
             except (PlaywrightError, OSError) as exc:
                 await self._cleanup_playwright()
@@ -93,6 +102,7 @@ class InspectClient:
             raise RuntimeError("Browser is not initialized")
 
         page = await self._browser.new_page()
+        await page.route("**/*", _block_resources)
         timeout_ms = int(self._timeout * 1000)
         page.set_default_navigation_timeout(timeout_ms)
         page.set_default_timeout(timeout_ms)
@@ -100,17 +110,8 @@ class InspectClient:
         try:
             logger.info("Navigating to CSFloat checker", inspect_url=inspect_url)
             await page.goto("https://csfloat.com/checker")
-
-            # Wait 5 seconds for page to load
-            logger.debug("Waiting 5 seconds for page to load")
             await page.wait_for_timeout(5000)
-
-            # Fill in the inspect URL
-            logger.debug("Filling inspect URL into input field")
             await page.fill("#mat-input-0", inspect_url)
-
-            # Wait 5 seconds for results to load
-            logger.debug("Waiting 5 seconds for results to load")
             await page.wait_for_timeout(5000)
 
             # Check if float div appeared (correct class: mat-mdc-tooltip-trigger wear)

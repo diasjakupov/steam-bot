@@ -6,13 +6,12 @@ from datetime import datetime
 from dataclasses import asdict
 
 import structlog
-from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import get_settings
 from ..core.db import get_sessionmaker, init_models
-from ..core.models import Alert, InspectHistory, ListingSnapshot, Watchlist
+from ..core.models import Alert, InspectHistory, ListingSnapshot, Watchlist, WorkerSettings
 from ..core.profit import ProfitInputs, is_profitable
 from ..core.rate_limit import build_bucket
 from ..integrations.inspect import InspectClient
@@ -20,12 +19,19 @@ from ..integrations.steam import SteamClient
 from ..integrations.telegram import TelegramClient
 
 logger = structlog.get_logger(__name__)
-WORKER_STATE_KEY = "worker:enabled"
 
 
-async def is_worker_enabled(redis: Redis) -> bool:
-    value = await redis.get(WORKER_STATE_KEY)
-    return value is None or value != b"0"
+async def is_worker_enabled(session: AsyncSession) -> bool:
+    """Check if worker is enabled in database."""
+    result = await session.execute(select(WorkerSettings).where(WorkerSettings.id == 1))
+    settings = result.scalar_one_or_none()
+    if settings is None:
+        # If no settings exist, create default (enabled)
+        settings = WorkerSettings(id=1, enabled=True)
+        session.add(settings)
+        await session.commit()
+        return True
+    return settings.enabled
 
 
 async def evaluate_and_alert(
@@ -38,29 +44,20 @@ async def evaluate_and_alert(
     rules = watch.rules
     float_value = inspect_data.get("float_value")
     if float_value is None:
-        logger.debug("Skipping item without float value", price_cents=listing.price_cents)
         return
-        
-    logger.info("Evaluating item for alerts", 
-               price_cents=listing.price_cents,
-               float_value=float_value,
-               market_hash_name=watch.market_hash_name)
-    
+
     float_min = rules.get("float_min")
     float_max = rules.get("float_max")
     if float_min is not None and float_value < float_min:
-        logger.debug("Item below float minimum", float_value=float_value, float_min=float_min)
         return
     if float_max is not None and float_value > float_max:
-        logger.debug("Item above float maximum", float_value=float_value, float_max=float_max)
         return
-        
+
     seed_whitelist = rules.get("seed_whitelist")
     paint_seed = inspect_data.get("paint_seed")
     if seed_whitelist and paint_seed not in seed_whitelist:
-        logger.debug("Item seed not in whitelist", paint_seed=paint_seed, seed_whitelist=seed_whitelist)
         return
-        
+
     sticker_any = rules.get("sticker_any") or []
     stickers_data = inspect_data.get("stickers", []) or []
     sticker_list = [s.get("name") for s in stickers_data if s.get("name")]
@@ -68,11 +65,8 @@ async def evaluate_and_alert(
     if sticker_any:
         sticker_names = set(sticker_list)
         if not sticker_names.intersection(sticker_any):
-            logger.debug("Item stickers don't match requirements", 
-                        stickers=sticker_list, 
-                        required_stickers=sticker_any)
             return
-            
+
     inputs = ProfitInputs(
         target_resale_usd=rules["target_resale_usd"],
         min_profit_usd=rules["min_profit_usd"],
@@ -80,10 +74,6 @@ async def evaluate_and_alert(
         combined_fee_min_cents=get_settings().combined_fee_min_cents,
     )
     if not is_profitable(listing.price_cents, inputs):
-        logger.debug("Item not profitable", 
-                    price_cents=listing.price_cents,
-                    target_resale=rules["target_resale_usd"],
-                    min_profit=rules["min_profit_usd"])
         return
         
     logger.info("🚨 PROFITABLE ITEM FOUND! Sending alert", 
@@ -111,29 +101,22 @@ async def process_watch(
     steam: SteamClient,
     inspector: InspectClient,
     telegram: TelegramClient,
-    redis: Redis,
+    inspect_bucket,
     watch: Watchlist,
 ) -> None:
-    logger.info("Fetching Steam listings", 
-               market_hash_name=watch.market_hash_name, 
+    logger.info("Fetching Steam listings",
+               market_hash_name=watch.market_hash_name,
                appid=watch.appid)
     listings = await steam.fetch_listings(watch.appid, watch.market_hash_name)
     logger.info("Fetched listings from Steam",
                count=len(listings),
                market_hash_name=watch.market_hash_name)
-
-    # Use conservative rate limit for CSFloat website (0.25 RPS = 1 request per 4 seconds)
-    inspect_bucket = await build_bucket(
-        redis,
-        key="inspect",
-        rps=0.25,
-    )
     
     new_listings = 0
     inspected_listings = 0
-    
+
     for parsed in listings:
-        if not await is_worker_enabled(redis):
+        if not await is_worker_enabled(session):
             logger.info("Worker stop requested, ending current cycle early")
             break
         existing = await session.execute(
@@ -146,11 +129,6 @@ async def process_watch(
         snapshot = existing.scalar_one_or_none()
         if snapshot is not None:
             if snapshot.inspected:
-                logger.debug(
-                    "Skipping listing already inspected",
-                    listing_key=parsed.listing_key,
-                    price_cents=parsed.price_cents,
-                )
                 continue
             logger.info(
                 "Reprocessing existing listing without inspect data",
@@ -178,9 +156,8 @@ async def process_watch(
             )
             session.add(snapshot)
             await session.flush()
-        
+
         if not parsed.inspect_url:
-            logger.debug("Skipping listing without inspect URL", price_cents=parsed.price_cents)
             continue
         
         cached_history = None
@@ -254,16 +231,23 @@ async def process_watch(
 async def worker_loop() -> None:
     settings = get_settings()
     logger.info("Starting worker loop", poll_interval=settings.poll_interval_s)
-    redis = Redis.from_url(str(settings.redis_url))
-    await redis.setnx(WORKER_STATE_KEY, "1")
     sessionmaker = get_sessionmaker()
     steam = SteamClient()
     inspector = InspectClient()
     telegram = TelegramClient()
+
+    # Create in-memory rate limiter for CSFloat website (0.25 RPS = 1 request per 4 seconds)
+    inspect_bucket = build_bucket(rps=0.25)
+
     try:
         paused_logged = False
         while True:
-            if not await is_worker_enabled(redis):
+            # Check worker status in a separate session to avoid holding transaction open
+            async with sessionmaker() as check_session:
+                enabled = await is_worker_enabled(check_session)
+                await check_session.commit()
+
+            if not enabled:
                 if not paused_logged:
                     logger.info("Worker paused by admin")
                     paused_logged = True
@@ -280,7 +264,12 @@ async def worker_loop() -> None:
                 logger.info("Found watches to process", count=len(watches))
 
                 for watch in watches:
-                    if not await is_worker_enabled(redis):
+                    # Check worker status before processing each watch
+                    async with sessionmaker() as check_session:
+                        enabled = await is_worker_enabled(check_session)
+                        await check_session.commit()
+
+                    if not enabled:
                         logger.info("Worker stop requested before processing remaining watches")
                         break
                     # Capture primitives before potential lazy loads to avoid MissingGreenlet
@@ -294,7 +283,7 @@ async def worker_loop() -> None:
                             market_hash_name=watch_name,
                             appid=watch_appid,
                         )
-                        await process_watch(session, steam, inspector, telegram, redis, watch)
+                        await process_watch(session, steam, inspector, telegram, inspect_bucket, watch)
                         await session.commit()
                         logger.info("Successfully processed watch", watch_id=watch_id)
                     except Exception as exc:  # pylint: disable=broad-except
@@ -306,7 +295,12 @@ async def worker_loop() -> None:
                         )
                     )
 
-            if not await is_worker_enabled(redis):
+            # Check worker status after cycle completion
+            async with sessionmaker() as check_session:
+                enabled = await is_worker_enabled(check_session)
+                await check_session.commit()
+
+            if not enabled:
                 logger.info("Worker stop request detected after cycle completion")
                 continue
 
@@ -317,7 +311,6 @@ async def worker_loop() -> None:
         await steam.close()
         await inspector.close()
         await telegram.close()
-        await redis.aclose()
         logger.info("Worker shutdown complete")
 
 

@@ -7,7 +7,6 @@ This guide covers various deployment options for the CS2 Market Watcher applicat
 Your app needs:
 - **Docker support** (multi-container orchestration)
 - **Postgres** database
-- **Redis** cache
 - **~512MB-1GB RAM** minimum (Playwright browser + services)
 - **Persistent storage** for Postgres data
 - **24/7 uptime** (worker must run continuously)
@@ -267,16 +266,13 @@ primary_region = "sjc"
   worker = "python -m src.worker.main"
 ```
 
-**3. Create Postgres and Redis**
+**3. Create Postgres**
 ```bash
 # Create Postgres
 fly postgres create --name cs2bot-db --region sjc --vm-size shared-cpu-1x --volume-size 1
 
 # Attach to app
 fly postgres attach cs2bot-db
-
-# Create Redis (use Upstash via Fly.io addon)
-fly redis create --name cs2bot-redis --region sjc
 ```
 
 **4. Set secrets**
@@ -321,7 +317,7 @@ fly scale count api=1 worker=1
 ### What You Get
 - Usage-based pricing (~$5-10/month for your app)
 - GitHub auto-deploy
-- 1-click Postgres/Redis addons
+- 1-click Postgres addon
 - Beautiful dashboard
 
 ### Setup Steps
@@ -340,8 +336,7 @@ fly scale count api=1 worker=1
 **3. Add services**
 ```
 1. Add Postgres: New > Database > PostgreSQL
-2. Add Redis: New > Database > Redis
-3. Railway auto-injects DATABASE_URL and REDIS_URL
+2. Railway auto-injects DATABASE_URL
 ```
 
 **4. Set environment variables**
@@ -412,11 +407,10 @@ Based on your app's requirements:
 Service    | RAM Usage | Notes
 -----------|-----------|----------------------------------
 Postgres   | 100-150MB | Minimal with small dataset
-Redis      | 50-100MB  | Cache + rate limiting
 API        | 100-150MB | FastAPI + dependencies
 Worker     | 300-500MB | Playwright browser + scraping
 -----------|-----------|----------------------------------
-TOTAL      | 550-900MB | Minimum recommended: 1GB
+TOTAL      | 500-800MB | Minimum recommended: 1GB
 ```
 
 **Playwright Notes:**
@@ -458,6 +452,8 @@ After deploying to any platform:
 1. **Run database migrations**
    ```bash
    psql $DATABASE_URL -f migrations/001_init.sql
+   psql $DATABASE_URL -f migrations/002_add_cascade_to_inspect_history.sql
+   psql $DATABASE_URL -f migrations/003_add_worker_settings.sql
    ```
 
 2. **Verify services are running**
@@ -526,8 +522,8 @@ docker compose exec postgres psql -U steam -d steam -c "SELECT 1"
 # Check worker is running
 docker compose ps worker
 
-# Check Redis connection
-docker compose exec worker python -c "from redis import Redis; r = Redis.from_url('redis://redis:6379/0'); print(r.ping())"
+# Check database connection
+docker compose exec postgres psql -U steam -d steam -c "SELECT * FROM worker_settings"
 
 # Enable worker if paused
 # Visit http://your-host:8000/admin/watches and click "Start Worker"
@@ -549,7 +545,6 @@ docker compose exec worker python -c "from redis import Redis; r = Redis.from_ur
 2. **Limit watches** - Each watch polls Steam every ~10 seconds
 3. **Increase POLL_INTERVAL_S** - Reduce polling frequency if needed
 4. **Monitor resource usage** - Most platforms show RAM/CPU graphs
-5. **Clean old HTML dumps** - `html-dumps/` directory can grow large
 
 ---
 

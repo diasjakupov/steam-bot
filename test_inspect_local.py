@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """
 Local test script for InspectClient using CSFloat checker website.
-No database or Redis required - just tests the Playwright scraping.
+No database required - just tests the Playwright scraping.
 """
 import asyncio
 import os
 import sys
 
 # Set minimal dummy env vars before importing
-os.environ.setdefault("DATABASE_URL", "postgresql://dummy:dummy@localhost/dummy")
-os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "dummy-token")
 os.environ.setdefault("TELEGRAM_CHAT_ID", "dummy-id")
 

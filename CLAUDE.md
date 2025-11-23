@@ -12,12 +12,11 @@ The project uses a multi-service architecture orchestrated via Docker Compose:
 
 - **FastAPI Control API** (`src/api/main.py`): HTTP API and admin web panel for managing watchlist entries, worker control, and viewing inspect history
 - **Worker** (`src/worker/main.py`): Async polling loop that fetches Steam listings, inspects items via CSFloat checker website, evaluates rules, and sends alerts
-- **Postgres**: Stores watchlist entries, listing snapshots, alerts, and inspect history cache
-- **Redis**: Rate limiting (token buckets) and worker state management
+- **SQLite Database**: Stores watchlist entries, listing snapshots, alerts, inspect history cache, and worker state in a single portable file
 
 ### Data Flow
 
-1. Worker polls Postgres for active `Watchlist` entries
+1. Worker polls SQLite database for active `Watchlist` entries
 2. For each watch, fetches first page of Steam listings using Playwright-based headless browser (renders JavaScript-heavy Steam pages)
 3. Parses rendered HTML with `selectolax` to extract price, listing key, and inspect URL
 4. Checks `InspectHistory` table for cached inspect results by URL
@@ -34,10 +33,11 @@ The project uses a multi-service architecture orchestrated via Docker Compose:
 - `ListingSnapshot`: Captures a listing at a point in time with `listing_key`, `price_cents`, `parsed` (dict with listing_url, inspect_url), `inspected` (dict with float_value, paint_seed, stickers), `alerted` flag
 - `InspectHistory`: Caches inspect results by `inspect_url` to avoid redundant inspect calls
 - `Alert`: Audit trail of sent Telegram messages
+- `WorkerSettings`: Stores worker enabled/disabled state in database (replaces Redis-based state management)
 
 ### Rate Limiting (src/core/rate_limit.py)
 
-Uses Redis-based token bucket with configurable RPS. Worker uses 0.25 RPS (1 request every 4 seconds) for inspect calls to CSFloat checker to avoid rate limiting.
+Uses in-memory token bucket with configurable RPS. Worker uses 0.25 RPS (1 request every 4 seconds) for inspect calls to CSFloat checker to avoid rate limiting. For single-worker deployments, in-memory rate limiting is sufficient.
 
 ### Profit Calculation (src/core/profit.py)
 
@@ -51,14 +51,20 @@ Compares listing price against expected resale price after Steam fees (15% combi
 docker compose up --build
 ```
 
-Starts all services (postgres, redis, inspect, api, worker). API available at http://localhost:8000, inspect service at http://localhost:5000.
+Starts all services (API and worker). SQLite database is automatically initialized on first run. API available at http://localhost:8000.
 
-### Database Setup
+### Database Initialization
 
-Apply migrations:
+The database is automatically created when services start. SQLAlchemy creates all tables from models defined in `src/core/models.py`. The SQLite file is stored in a Docker volume for persistence.
+
+Manual initialization (if needed):
 
 ```bash
-psql $DATABASE_URL -f migrations/001_init.sql
+docker compose exec api python -c "
+import asyncio
+from src.core.db import init_models
+asyncio.run(init_models())
+"
 ```
 
 ### Local Development
@@ -107,7 +113,7 @@ open http://localhost:8000/admin/watches
 
 ### Worker Control
 
-Worker can be paused/resumed via admin panel or by setting Redis key `worker:enabled` to "0" (pause) or "1" (resume).
+Worker can be paused/resumed via admin panel which updates the `worker_settings` table in Postgres. The worker polls this table to check if it should continue processing.
 
 ## Steam Listing Parsing
 
@@ -118,8 +124,6 @@ The worker uses Playwright headless browser to render JavaScript-heavy Steam mar
 - Finds listing key from `id` attribute or `data-paintindex`
 - Searches for inspect URL by looking for anchors with "inspect in game" text and `steam://` protocol
 - Returns `ParsedListing` dataclass with listing_key, price_cents, inspect_url, listing_url
-
-**HTML dumping**: Worker saves rendered HTML snapshots to `STEAM_HTML_DUMP_DIR` (default: `./html-dumps`) for debugging. Each fetch creates a timestamped file like `730-AK-47_Redline_Field-Tested-1759380510.html`.
 
 ## Inspect Integration
 
@@ -142,15 +146,13 @@ The worker uses Playwright to automate the public CSFloat checker website (https
 
 ## Environment Variables
 
-Key settings (see `.env.example`):
+Key settings:
 
-- `DATABASE_URL`: Postgres connection string
-- `REDIS_URL`: Redis connection string
+- `DATABASE_URL`: SQLite database path (default: `sqlite+aiosqlite:////data/cs2bot.db`)
 - `FLOAT_API_TIMEOUT`: Playwright timeout for inspect operations (default: 30s)
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`: Telegram notification settings
 - `POLL_INTERVAL_S`: Worker cycle sleep duration (default: 10)
 - `COMBINED_FEE_RATE`: Steam marketplace fee rate (default: 0.15)
-- `STEAM_HTML_DUMP_DIR`: Path to save rendered HTML snapshots (default: ./html-dumps)
 - `ADMIN_DEFAULT_MIN_PROFIT_USD`: Default min profit when creating watches via admin panel (default: 0.0)
 
 ## Testing Strategy
@@ -159,12 +161,14 @@ Key settings (see `.env.example`):
 
 **Integration tests** (`tests/integration/`): Test API endpoints and inspect client against real services (requires Docker Compose).
 
-**Test fixtures** (`tests/conftest.py`): Provides `default_env` fixture that sets required env vars and clears settings cache.
+**Test fixtures** (`tests/conftest.py`): Provides `default_env` fixture that sets required env vars and clears settings cache. Tests use in-memory SQLite database.
 
 ## Important Constraints
 
 - **Read-only**: System never places orders or buys items
-- **Rate limiting**: Token bucket prevents overwhelming Steam and CSFloat (0.25 RPS for inspect calls)
+- **Rate limiting**: In-memory token bucket prevents overwhelming Steam and CSFloat (0.25 RPS for inspect calls)
+- **Single worker**: In-memory rate limiting and SQLite assume single worker instance. For multiple workers, consider PostgreSQL
+- **SQLite limitations**: No built-in connection pooling, not ideal for high concurrency. Perfect for ~100 entries and single worker
 - **Deduplication**: Listings are tracked by `(watchlist_id, listing_key, price_cents)` to avoid re-inspecting same item
 - **Inspect caching**: `InspectHistory` table caches results by `inspect_url` indefinitely to minimize CSFloat requests
 - **Playwright requirement**: Playwright browser must be installed in Docker image (see Dockerfile install steps)
@@ -176,9 +180,9 @@ Key settings (see `.env.example`):
 
 2. **Lazy loading in worker**: Worker captures primitives (`watch.id`, `watch.market_hash_name`, etc.) before async operations to avoid SQLAlchemy `MissingGreenlet` errors.
 
-3. **Worker pause logic**: Worker checks `worker:enabled` Redis key at multiple points (start of cycle, before processing each watch, after cycle) to enable graceful shutdown without losing work.
+3. **Worker pause logic**: Worker checks `worker_settings` database table at multiple points (start of cycle, before processing each watch, after cycle) to enable graceful shutdown without losing work.
 
-4. **HTML dump directory**: Worker creates directory if it doesn't exist. In Docker, `./html-dumps` is mounted as volume so dumps persist on host.
+4. **SQLite file location**: The database file is stored in a Docker volume at `/data/cs2bot.db`. Both API and worker containers share this volume to access the same database.
 
 5. **Settings cache**: `get_settings()` is cached with `@lru_cache`. Tests must call `get_settings.cache_clear()` to reset state.
 
@@ -186,4 +190,4 @@ Key settings (see `.env.example`):
 
 7. **CSFloat website scraping**: InspectClient relies on specific CSS selectors (#mat-input-0 for input, .mat-mdc-tooltip-trigger.wear for float value). If CSFloat updates their UI, inspection will fail. Monitor logs for "inspect attempt failed" errors.
 
-8. **Conservative rate limiting**: The 0.25 RPS rate limit for CSFloat is hardcoded in worker/main.py:129. This is intentionally conservative to avoid rate limiting on their public service.
+8. **Conservative rate limiting**: The 0.25 RPS rate limit for CSFloat is hardcoded in worker/main.py. This is intentionally conservative to avoid rate limiting on their public service.
