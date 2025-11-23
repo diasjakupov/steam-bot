@@ -545,7 +545,6 @@ docker compose exec postgres psql -U steam -d steam -c "SELECT * FROM worker_set
 2. **Limit watches** - Each watch polls Steam every ~10 seconds
 3. **Increase POLL_INTERVAL_S** - Reduce polling frequency if needed
 4. **Monitor resource usage** - Most platforms show RAM/CPU graphs
-5. **Clean old HTML dumps** - `html-dumps/` directory can grow large
 
 ---
 

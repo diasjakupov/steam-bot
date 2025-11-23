@@ -15,7 +15,6 @@ services:
       - "8000:8000"
     volumes:
       - sqlite-data:/data
-      - ./html-dumps:/app/html-dumps
     networks:
       - app-network
   worker:
@@ -32,7 +31,6 @@ services:
     command: ["python", "-m", "src.worker.main"]
     volumes:
       - sqlite-data:/data
-      - ./html-dumps:/app/html-dumps
     networks:
       - app-network
 

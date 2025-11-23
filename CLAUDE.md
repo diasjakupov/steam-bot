@@ -125,8 +125,6 @@ The worker uses Playwright headless browser to render JavaScript-heavy Steam mar
 - Searches for inspect URL by looking for anchors with "inspect in game" text and `steam://` protocol
 - Returns `ParsedListing` dataclass with listing_key, price_cents, inspect_url, listing_url
 
-**HTML dumping**: Worker saves rendered HTML snapshots to `STEAM_HTML_DUMP_DIR` (default: `./html-dumps`) for debugging. Each fetch creates a timestamped file like `730-AK-47_Redline_Field-Tested-1759380510.html`.
-
 ## Inspect Integration
 
 The worker uses Playwright to automate the public CSFloat checker website (https://csfloat.com/checker) for retrieving float values and item metadata.
@@ -155,7 +153,6 @@ Key settings:
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`: Telegram notification settings
 - `POLL_INTERVAL_S`: Worker cycle sleep duration (default: 10)
 - `COMBINED_FEE_RATE`: Steam marketplace fee rate (default: 0.15)
-- `STEAM_HTML_DUMP_DIR`: Path to save rendered HTML snapshots (default: ./html-dumps)
 - `ADMIN_DEFAULT_MIN_PROFIT_USD`: Default min profit when creating watches via admin panel (default: 0.0)
 
 ## Testing Strategy
@@ -187,12 +184,10 @@ Key settings:
 
 4. **SQLite file location**: The database file is stored in a Docker volume at `/data/cs2bot.db`. Both API and worker containers share this volume to access the same database.
 
-5. **HTML dump directory**: Worker creates directory if it doesn't exist. In Docker, `./html-dumps` is mounted as volume so dumps persist on host.
+5. **Settings cache**: `get_settings()` is cached with `@lru_cache`. Tests must call `get_settings.cache_clear()` to reset state.
 
-6. **Settings cache**: `get_settings()` is cached with `@lru_cache`. Tests must call `get_settings.cache_clear()` to reset state.
+6. **Inspect URL extraction**: Parsing looks for "inspect in game" text in anchor elements with `steam://` protocol. If Steam changes page structure, parsing may fail silently (logs warning with anchor samples).
 
-7. **Inspect URL extraction**: Parsing looks for "inspect in game" text in anchor elements with `steam://` protocol. If Steam changes page structure, parsing may fail silently (logs warning with anchor samples).
+7. **CSFloat website scraping**: InspectClient relies on specific CSS selectors (#mat-input-0 for input, .mat-mdc-tooltip-trigger.wear for float value). If CSFloat updates their UI, inspection will fail. Monitor logs for "inspect attempt failed" errors.
 
-8. **CSFloat website scraping**: InspectClient relies on specific CSS selectors (#mat-input-0 for input, .mat-mdc-tooltip-trigger.wear for float value). If CSFloat updates their UI, inspection will fail. Monitor logs for "inspect attempt failed" errors.
-
-9. **Conservative rate limiting**: The 0.25 RPS rate limit for CSFloat is hardcoded in worker/main.py. This is intentionally conservative to avoid rate limiting on their public service.
+8. **Conservative rate limiting**: The 0.25 RPS rate limit for CSFloat is hardcoded in worker/main.py. This is intentionally conservative to avoid rate limiting on their public service.

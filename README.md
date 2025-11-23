@@ -45,7 +45,6 @@ Copy `.env.example` to `.env` and fill in required secrets.
 DATABASE_URL=sqlite+aiosqlite:////data/cs2bot.db
 STEAM_CURRENCY_ID=1
 FLOAT_API_TIMEOUT=30
-STEAM_HTML_DUMP_DIR=./html-dumps
 TELEGRAM_BOT_TOKEN=replace-me
 TELEGRAM_CHAT_ID=replace-me
 POLL_INTERVAL_S=10
@@ -57,9 +56,6 @@ ADMIN_DEFAULT_MIN_PROFIT_USD=0.0
 `ADMIN_DEFAULT_MIN_PROFIT_USD` controls the minimum profit automatically applied when you create watches through the web admin.
 
 The worker uses Playwright to automate the public CSFloat checker website (https://csfloat.com/checker) for retrieving item float values and metadata. Inspect requests are rate-limited to 0.25 RPS (one request every 4 seconds) to respect CSFloat's service.
-
-Set `STEAM_HTML_DUMP_DIR` to a writable path if you want the worker to persist the fully rendered Steam listing HTML for debugging. Each fetch writes a timestamped snapshot in that directory.
-The default Docker Compose setup mounts `./html-dumps` into the worker container and wires the environment variable so you can inspect saved pages on the host while tailing `docker compose logs`.
 
 ### Docker Compose
 
