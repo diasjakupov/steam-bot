@@ -1,32 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-import re
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 
+import httpx
 import structlog
-from playwright.async_api import (
-    Browser,
-    Error as PlaywrightError,
-    Playwright,
-    Route,
-    TimeoutError as PlaywrightTimeoutError,
-    async_playwright,
-)
 
 from ..core.config import get_settings
 
 
 logger = structlog.get_logger(__name__)
-
-
-async def _block_resources(route: Route) -> None:
-    """Block images, fonts, media, stylesheets, and other unnecessary resources to reduce network traffic."""
-    if route.request.resource_type in ["image", "media", "font", "stylesheet", "websocket", "manifest", "other"]:
-        await route.abort()
-    else:
-        await route.continue_()
 
 
 @dataclass
@@ -42,45 +27,34 @@ class InspectClient:
     def __init__(self, *, timeout: Optional[float] = None) -> None:
         self.settings = get_settings()
         self._timeout = timeout if timeout is not None else self.settings.float_api_timeout
-        self._playwright: Playwright | None = None
-        self._browser: Browser | None = None
-        self._browser_lock = asyncio.Lock()
+        self.client = httpx.AsyncClient(
+            timeout=self._timeout,
+            headers={
+                "Accept": "application/json",
+                "Origin": "https://csfloat.com",
+                "Referer": "https://csfloat.com/",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            }
+        )
 
     async def close(self) -> None:
-        async with self._browser_lock:
-            await self._cleanup_playwright()
-
-    async def _ensure_browser(self) -> None:
-        if self._browser is not None:
-            return
-        async with self._browser_lock:
-            if self._browser is not None:
-                return
-            self._playwright = await async_playwright().start()
-            try:
-                self._browser = await self._playwright.chromium.launch(
-                    headless=True,
-                    args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
-                )
-            except (PlaywrightError, OSError) as exc:
-                await self._cleanup_playwright()
-                raise RuntimeError("Failed to launch Playwright browser") from exc
-
-    async def _cleanup_playwright(self) -> None:
-        if self._browser is not None:
-            await self._browser.close()
-            self._browser = None
-        if self._playwright is not None:
-            await self._playwright.stop()
-            self._playwright = None
+        await self.client.aclose()
 
     async def inspect(self, inspect_url: str) -> Optional[InspectResult]:
+        """Inspect an item using the CSFloat API.
+
+        Args:
+            inspect_url: Steam inspect URL (steam://rungame/730/...)
+
+        Returns:
+            InspectResult if successful, None if all retries fail
+        """
         retries = 3
         delay = 2.0
         for attempt in range(retries):
             try:
                 return await self._inspect_once(inspect_url)
-            except (PlaywrightError, PlaywrightTimeoutError, ValueError) as exc:
+            except (httpx.HTTPError, ValueError, KeyError) as exc:
                 logger.warning(
                     "Inspect attempt failed",
                     attempt=attempt + 1,
@@ -97,117 +71,84 @@ class InspectClient:
         return None
 
     async def _inspect_once(self, inspect_url: str) -> InspectResult:
-        await self._ensure_browser()
-        if self._browser is None:
-            raise RuntimeError("Browser is not initialized")
+        """Make a single API request to CSFloat.
 
-        page = await self._browser.new_page()
-        await page.route("**/*", _block_resources)
-        timeout_ms = int(self._timeout * 1000)
-        page.set_default_navigation_timeout(timeout_ms)
-        page.set_default_timeout(timeout_ms)
+        Args:
+            inspect_url: Steam inspect URL
+
+        Returns:
+            InspectResult with extracted data
+
+        Raises:
+            httpx.HTTPError: On HTTP request failures
+            ValueError: On invalid/missing response data
+            KeyError: On missing required fields in API response
+        """
+        # URL-encode the inspect URL for the API request
+        encoded_url = quote(inspect_url, safe="")
+        api_url = f"https://api.csfloat.com/?url={encoded_url}"
+
+        logger.info("Calling CSFloat API", inspect_url=inspect_url, api_url=api_url)
 
         try:
-            logger.info("Navigating to CSFloat checker", inspect_url=inspect_url)
-            await page.goto("https://csfloat.com/checker")
-            await page.wait_for_timeout(5000)
-            await page.fill("#mat-input-0", inspect_url)
-            await page.wait_for_timeout(5000)
-
-            # Check if float div appeared (correct class: mat-mdc-tooltip-trigger wear)
-            float_element = await page.query_selector(".mat-mdc-tooltip-trigger.wear")
-            if not float_element:
-                logger.warning("Float value element not found after 5 seconds, skipping", inspect_url=inspect_url)
-                return None
-
-            float_text = await float_element.inner_text()
-            float_value = self._parse_float(float_text)
-
-            logger.info("Successfully extracted float value", float_value=float_value)
-
-            # Try to extract additional data if available
-            paint_seed = await self._extract_paint_seed(page)
-            paint_index = await self._extract_paint_index(page)
-            wear_name = await self._extract_wear_name(page)
-            stickers = await self._extract_stickers(page)
-
-            return InspectResult(
-                float_value=float_value,
-                paint_seed=paint_seed,
-                paint_index=paint_index,
-                stickers=stickers,
-                wear_name=wear_name,
+            response = await self.client.get(api_url)
+            response.raise_for_status()
+            data = response.json()
+        except httpx.HTTPStatusError as exc:
+            logger.error(
+                "CSFloat API HTTP error",
+                status=exc.response.status_code,
+                url=api_url,
+                inspect_url=inspect_url,
             )
-        finally:
-            await page.close()
+            raise ValueError(f"CSFloat API returned status {exc.response.status_code}") from exc
+        except httpx.RequestError as exc:
+            logger.error("CSFloat API request error", error=str(exc), url=api_url)
+            raise ValueError(f"Failed to connect to CSFloat API: {exc}") from exc
+        except ValueError as exc:
+            # JSON decode error
+            logger.error("CSFloat API JSON error", error=str(exc), url=api_url)
+            raise ValueError("Failed to parse CSFloat API JSON response") from exc
 
-    @staticmethod
-    def _parse_float(text: str) -> float:
-        """Extract float value from text like '0.123456' or 'Float: 0.123456'"""
-        match = re.search(r"(\d+\.\d+)", text)
-        if not match:
-            raise ValueError(f"Could not parse float value from: {text}")
-        return float(match.group(1))
+        # Extract iteminfo from response
+        if "iteminfo" not in data:
+            logger.error("CSFloat API missing iteminfo", data_keys=list(data.keys()), inspect_url=inspect_url)
+            raise ValueError("CSFloat API response missing 'iteminfo' field")
 
-    async def _extract_paint_seed(self, page) -> Optional[int]:
-        """Try to extract paint seed from the page"""
-        try:
-            # Look for text containing "Paint Seed" or "Seed"
-            seed_element = await page.query_selector("text=/paint seed|seed/i")
-            if seed_element:
-                seed_text = await seed_element.inner_text()
-                match = re.search(r"(\d+)", seed_text)
-                if match:
-                    return int(match.group(1))
-        except Exception:
-            pass
-        return None
+        iteminfo = data["iteminfo"]
 
-    async def _extract_paint_index(self, page) -> Optional[int]:
-        """Try to extract paint index from the page"""
-        try:
-            # Look for text containing "Paint Index"
-            index_element = await page.query_selector("text=/paint index/i")
-            if index_element:
-                index_text = await index_element.inner_text()
-                match = re.search(r"(\d+)", index_text)
-                if match:
-                    return int(match.group(1))
-        except Exception:
-            pass
-        return None
+        # Extract required float value
+        if "floatvalue" not in iteminfo:
+            logger.error("CSFloat API missing floatvalue", iteminfo_keys=list(iteminfo.keys()), inspect_url=inspect_url)
+            raise ValueError("CSFloat API response missing 'floatvalue' field")
 
-    async def _extract_wear_name(self, page) -> Optional[str]:
-        """Try to extract wear name (Factory New, Minimal Wear, etc.)"""
-        try:
-            # Look for common wear tier names
-            wear_patterns = [
-                "Factory New",
-                "Minimal Wear",
-                "Field-Tested",
-                "Well-Worn",
-                "Battle-Scarred",
-            ]
-            for wear in wear_patterns:
-                element = await page.query_selector(f"text=/{wear}/i")
-                if element:
-                    return wear
-        except Exception:
-            pass
-        return None
+        float_value = float(iteminfo["floatvalue"])
 
-    async def _extract_stickers(self, page) -> list[Dict[str, Any]]:
-        """Try to extract sticker information from the page"""
-        try:
-            stickers = []
-            # CSFloat usually shows stickers with specific classes or patterns
-            # This is a best-effort extraction
-            sticker_elements = await page.query_selector_all(".sticker, [class*='sticker']")
-            for element in sticker_elements:
-                text = await element.inner_text()
-                if text:
-                    stickers.append({"name": text.strip()})
-            return stickers
-        except Exception:
-            pass
-        return []
+        # Extract optional fields with defaults
+        paint_seed = iteminfo.get("paintseed")
+        paint_index = iteminfo.get("paintindex")
+        wear_name = iteminfo.get("wear_name")
+
+        # Convert stickers array to list of dicts
+        stickers = []
+        if "stickers" in iteminfo and isinstance(iteminfo["stickers"], list):
+            for sticker in iteminfo["stickers"]:
+                if isinstance(sticker, dict):
+                    stickers.append(sticker)
+
+        logger.info(
+            "Successfully extracted item data",
+            float_value=float_value,
+            paint_seed=paint_seed,
+            paint_index=paint_index,
+            wear_name=wear_name,
+            sticker_count=len(stickers),
+        )
+
+        return InspectResult(
+            float_value=float_value,
+            paint_seed=paint_seed,
+            paint_index=paint_index,
+            stickers=stickers,
+            wear_name=wear_name,
+        )

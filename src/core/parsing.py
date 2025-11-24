@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
-from selectolax.parser import HTMLParser
+from bs4 import BeautifulSoup, Tag
 
 from .profit import price_to_cents
 
@@ -26,59 +26,59 @@ class ParseError(RuntimeError):
     pass
 
 
-def _extract_price(node: HTMLParser) -> int:
-    price_node = node.css_first("span.market_listing_price_with_fee")
+def _extract_price(node: Tag) -> int:
+    price_node = node.select_one("span.market_listing_price_with_fee")
     if not price_node:
         raise ParseError("price node missing")
-    price_text = price_node.text(strip=True)
+    price_text = price_node.get_text(strip=True)
     if not price_text:
         raise ParseError("empty price text")
     return price_to_cents(price_text)
 
 
-def _extract_listing_key(node: HTMLParser) -> str:
-    data_listing_id = node.attributes.get("id")
+def _extract_listing_key(node: Tag) -> str:
+    data_listing_id = node.get("id")
     if data_listing_id:
         return data_listing_id
-    asset = node.css_first("div.market_listing_item_name_block")
-    if asset and asset.attributes.get("data-paintindex"):
-        return asset.attributes["data-paintindex"]
+    asset = node.select_one("div.market_listing_item_name_block")
+    if asset and asset.get("data-paintindex"):
+        return asset.get("data-paintindex")
     raise ParseError("unable to determine listing key")
 
 
-def _extract_urls(node: HTMLParser) -> tuple[Optional[str], Optional[str]]:
-    link = node.css_first("a.market_listing_row_link")
-    listing_url = link.attributes.get("href") if link else None
+def _extract_urls(node: Tag) -> tuple[Optional[str], Optional[str]]:
+    link = node.select_one("a.market_listing_row_link")
+    listing_url = link.get("href") if link else None
     log = logger.bind(listing_url=listing_url)
     inspect_url = None
-    for anchor in node.css("div.market_listing_row_action a"):
-        text = anchor.text(strip=True)
+    for anchor in node.select("div.market_listing_row_action a"):
+        text = anchor.get_text(strip=True)
         if text and "inspect in game" in text.lower():
-            href = anchor.attributes.get("href", "")
+            href = anchor.get("href", "")
             if href.startswith("steam://"):
                 inspect_url = href
                 break
     if inspect_url is None:
-        for anchor in node.css("a"):
-            text = anchor.text(strip=True)
+        for anchor in node.select("a"):
+            text = anchor.get_text(strip=True)
             if not text or "inspect in game" not in text.lower():
                 continue
-            href = anchor.attributes.get("href", "")
+            href = anchor.get("href", "")
             if href.startswith("steam://"):
                 inspect_url = href
                 break
     if inspect_url is None:
-        inspect_button = node.css_first("a.market_action_menu_item")
-        if inspect_button and "steam://" in inspect_button.attributes.get("href", ""):
-            inspect_url = inspect_button.attributes["href"]
+        inspect_button = node.select_one("a.market_action_menu_item")
+        if inspect_button and "steam://" in inspect_button.get("href", ""):
+            inspect_url = inspect_button.get("href")
     if inspect_url is None:
         sample_anchors = []
-        for anchor in node.css("a"):
+        for anchor in node.select("a"):
             sample_anchors.append(
                 {
-                    "text": anchor.text(strip=True),
-                    "href": anchor.attributes.get("href", ""),
-                    "class": anchor.attributes.get("class", ""),
+                    "text": anchor.get_text(strip=True),
+                    "href": anchor.get("href", ""),
+                    "class": anchor.get("class", ""),
                 }
             )
             if len(sample_anchors) >= 5:
@@ -91,8 +91,8 @@ def _extract_urls(node: HTMLParser) -> tuple[Optional[str], Optional[str]]:
 
 
 def parse_results_html(results_html: str) -> Iterable[ParsedListing]:
-    parser = HTMLParser(results_html)
-    for row in parser.css("div.market_listing_row"):
+    parser = BeautifulSoup(results_html, 'lxml')
+    for row in parser.select("div.market_listing_row"):
         try:
             price_cents = _extract_price(row)
             listing_key = _extract_listing_key(row)
@@ -104,5 +104,5 @@ def parse_results_html(results_html: str) -> Iterable[ParsedListing]:
             price_cents=price_cents,
             inspect_url=inspect_url,
             listing_url=listing_url,
-            raw=row.attributes,
+            raw=row.attrs,
         )
