@@ -10,9 +10,10 @@ services:
       POLL_INTERVAL_S: 10
       COMBINED_FEE_RATE: 0.15
       COMBINED_FEE_MIN_CENTS: 1
-    command: ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: [ "uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000" ]
     ports:
       - "8000:8000"
+      - "80:8000"
     volumes:
       - sqlite-data:/data
     networks:
@@ -28,7 +29,7 @@ services:
       POLL_INTERVAL_S: 10
       COMBINED_FEE_RATE: 0.15
       COMBINED_FEE_MIN_CENTS: 1
-    command: ["python", "-m", "src.worker.main"]
+    command: [ "python", "-m", "src.worker.main" ]
     volumes:
       - sqlite-data:/data
     networks:
@@ -36,6 +37,7 @@ services:
 
 volumes:
   sqlite-data:
+
 
 networks:
   app-network:
