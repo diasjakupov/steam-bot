@@ -223,7 +223,7 @@ class SteamClient:
         )
 
     async def fetch_listings(
-        self, appid: int, market_hash_name: str, count: int = 100
+        self, appid: int, market_hash_name: str, count: int = 10
     ) -> Iterable[ParsedListing]:
         encoded_name = quote(market_hash_name, safe="")
         url = (
