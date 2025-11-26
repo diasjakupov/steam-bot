@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import random
 import re
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Awaitable, Callable, Iterable, Optional
 from urllib.parse import quote
@@ -29,7 +31,15 @@ class SteamAPIError(RuntimeError):
     """Raised when Steam API request fails."""
 
 
+class SteamRateLimitError(SteamAPIError):
+    """Raised when Steam returns 429 Too Many Requests."""
+
+
 class SteamClient:
+    # Circuit breaker settings
+    CIRCUIT_BREAKER_THRESHOLD = 3  # consecutive 429s before entering cooldown
+    CIRCUIT_BREAKER_MAX_COOLDOWN_MINUTES = 30
+
     def __init__(
         self,
         *,
@@ -50,8 +60,53 @@ class SteamClient:
         self._timeout = timeout
         self._page_fetcher = page_fetcher
 
+        # Circuit breaker state
+        self._consecutive_429s = 0
+        self._cooldown_until: datetime | None = None
+
     async def close(self) -> None:
         await self.client.aclose()
+
+    async def _check_circuit_breaker(self) -> None:
+        """Check if circuit breaker is active and wait if needed."""
+        if self._cooldown_until is not None:
+            now = datetime.utcnow()
+            if now < self._cooldown_until:
+                wait_seconds = (self._cooldown_until - now).total_seconds()
+                self.logger.info(
+                    "steam.circuit_breaker_active",
+                    wait_seconds=round(wait_seconds, 1),
+                    cooldown_until=self._cooldown_until.isoformat(),
+                )
+                await asyncio.sleep(wait_seconds)
+            # Reset cooldown after waiting
+            self._cooldown_until = None
+
+    def _on_success(self) -> None:
+        """Reset circuit breaker state on successful request."""
+        if self._consecutive_429s > 0:
+            self.logger.info(
+                "steam.circuit_breaker_reset",
+                previous_consecutive_429s=self._consecutive_429s,
+            )
+        self._consecutive_429s = 0
+
+    def _on_rate_limit(self) -> None:
+        """Update circuit breaker state on 429 response."""
+        self._consecutive_429s += 1
+        if self._consecutive_429s >= self.CIRCUIT_BREAKER_THRESHOLD:
+            # Enter cooldown: 5 minutes * consecutive_429s, capped at max
+            cooldown_minutes = min(
+                5 * self._consecutive_429s,
+                self.CIRCUIT_BREAKER_MAX_COOLDOWN_MINUTES,
+            )
+            self._cooldown_until = datetime.utcnow() + timedelta(minutes=cooldown_minutes)
+            self.logger.warning(
+                "steam.circuit_breaker_triggered",
+                consecutive_429s=self._consecutive_429s,
+                cooldown_minutes=cooldown_minutes,
+                cooldown_until=self._cooldown_until.isoformat(),
+            )
 
     async def _fetch_page_content(self, url: str) -> str:
         """Fetch page content using Steam's /render/ API endpoint or custom page_fetcher.
@@ -61,10 +116,17 @@ class SteamClient:
 
         Returns:
             HTML content string
+
+        Raises:
+            SteamRateLimitError: If Steam returns 429 after all retries
+            SteamAPIError: For other Steam API errors
         """
         if self._page_fetcher is not None:
             html = await self._page_fetcher(url)
             return html
+
+        # Check circuit breaker before making request
+        await self._check_circuit_breaker()
 
         # Convert regular URL to /render/ endpoint
         # Example: https://steamcommunity.com/market/listings/730/AK-47%20%7C%20Redline%20%28Field-Tested%29
@@ -85,27 +147,65 @@ class SteamClient:
 
         self.logger.debug("steam.fetch", url=render_url, referer=referer_url)
 
-        try:
-            response = await self.client.get(render_url, headers=headers)
-            response.raise_for_status()
-            data = response.json()
+        # Retry logic with exponential backoff for 429 errors
+        max_retries = 3
+        base_delay = 30  # Steam 429s need longer cooldown
 
-            # Extract results_html from JSON response
-            if "results_html" not in data:
-                self.logger.error("steam.missing_results_html", data_keys=list(data.keys()))
-                raise SteamAPIError("Steam API response missing 'results_html' field")
+        for attempt in range(max_retries):
+            try:
+                response = await self.client.get(render_url, headers=headers)
+                response.raise_for_status()
+                data = response.json()
 
-            return data["results_html"]
-        except httpx.HTTPStatusError as exc:
-            self.logger.error("steam.http_error", status=exc.response.status_code, url=render_url)
-            raise SteamAPIError(f"Steam API returned status {exc.response.status_code}") from exc
-        except httpx.RequestError as exc:
-            self.logger.error("steam.request_error", error=str(exc), url=render_url)
-            raise SteamAPIError(f"Failed to connect to Steam API: {exc}") from exc
-        except ValueError as exc:
-            # JSON decode error
-            self.logger.error("steam.json_error", error=str(exc), url=render_url)
-            raise SteamAPIError("Failed to parse Steam API JSON response") from exc
+                # Extract results_html from JSON response
+                if "results_html" not in data:
+                    self.logger.error("steam.missing_results_html", data_keys=list(data.keys()))
+                    raise SteamAPIError("Steam API response missing 'results_html' field")
+
+                # Success - reset circuit breaker
+                self._on_success()
+                return data["results_html"]
+
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 429:
+                    self._on_rate_limit()
+                    delay = base_delay * (2 ** attempt) + random.uniform(0, 5)
+                    self.logger.warning(
+                        "steam.rate_limited",
+                        status=429,
+                        attempt=attempt + 1,
+                        max_retries=max_retries,
+                        delay_seconds=round(delay, 1),
+                        url=render_url,
+                    )
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(delay)
+                        continue
+                    # Final attempt failed
+                    raise SteamRateLimitError(
+                        f"Steam API returned 429 after {max_retries} retries"
+                    ) from exc
+                else:
+                    self.logger.error(
+                        "steam.http_error",
+                        status=exc.response.status_code,
+                        url=render_url,
+                    )
+                    raise SteamAPIError(
+                        f"Steam API returned status {exc.response.status_code}"
+                    ) from exc
+
+            except httpx.RequestError as exc:
+                self.logger.error("steam.request_error", error=str(exc), url=render_url)
+                raise SteamAPIError(f"Failed to connect to Steam API: {exc}") from exc
+
+            except ValueError as exc:
+                # JSON decode error
+                self.logger.error("steam.json_error", error=str(exc), url=render_url)
+                raise SteamAPIError("Failed to parse Steam API JSON response") from exc
+
+        # Should not reach here, but just in case
+        raise SteamAPIError("Unexpected error in fetch loop")
 
     async def price_overview(self, appid: int, market_hash_name: str) -> PriceOverview:
         params = {

@@ -102,11 +102,20 @@ async def process_watch(
     inspector: InspectClient,
     telegram: TelegramClient,
     inspect_bucket,
+    steam_bucket,
     watch: Watchlist,
 ) -> None:
     logger.info("Fetching Steam listings",
                market_hash_name=watch.market_hash_name,
                appid=watch.appid)
+
+    # Rate limit Steam API requests
+    acquired = await steam_bucket.acquire(timeout=30)
+    if not acquired:
+        logger.warning("Steam rate limit reached, skipping watch",
+                      watch_id=watch.id, market_hash_name=watch.market_hash_name)
+        return
+
     listings = await steam.fetch_listings(watch.appid, watch.market_hash_name)
     logger.info("Fetched listings from Steam",
                count=len(listings),
@@ -238,6 +247,8 @@ async def worker_loop() -> None:
 
     # Create in-memory rate limiter for CSFloat website (0.25 RPS = 1 request per 4 seconds)
     inspect_bucket = build_bucket(rps=0.25)
+    # Create in-memory rate limiter for Steam API (0.5 RPS = 1 request per 2 seconds)
+    steam_bucket = build_bucket(rps=0.5)
 
     try:
         paused_logged = False
@@ -259,11 +270,13 @@ async def worker_loop() -> None:
 
             logger.info("Starting new polling cycle")
             async with sessionmaker() as session:
-                result = await session.execute(select(Watchlist))
-                watches = result.scalars().all()
-                logger.info("Found watches to process", count=len(watches))
+                # Fetch only watch IDs to avoid MissingGreenlet after rollback
+                # (rollback expires ORM objects, causing lazy load failures)
+                result = await session.execute(select(Watchlist.id))
+                watch_ids = [row[0] for row in result.fetchall()]
+                logger.info("Found watches to process", count=len(watch_ids))
 
-                for watch in watches:
+                for watch_id in watch_ids:
                     # Check worker status before processing each watch
                     async with sessionmaker() as check_session:
                         enabled = await is_worker_enabled(check_session)
@@ -272,8 +285,17 @@ async def worker_loop() -> None:
                     if not enabled:
                         logger.info("Worker stop requested before processing remaining watches")
                         break
-                    # Capture primitives before potential lazy loads to avoid MissingGreenlet
-                    watch_id = watch.id
+
+                    # Fetch fresh watch object for this iteration
+                    # This ensures we have a valid ORM object even after previous rollbacks
+                    watch_result = await session.execute(
+                        select(Watchlist).where(Watchlist.id == watch_id)
+                    )
+                    watch = watch_result.scalar_one_or_none()
+                    if watch is None:
+                        logger.warning("Watch not found, may have been deleted", watch_id=watch_id)
+                        continue
+
                     watch_name = watch.market_hash_name
                     watch_appid = watch.appid
                     try:
@@ -283,7 +305,7 @@ async def worker_loop() -> None:
                             market_hash_name=watch_name,
                             appid=watch_appid,
                         )
-                        await process_watch(session, steam, inspector, telegram, inspect_bucket, watch)
+                        await process_watch(session, steam, inspector, telegram, inspect_bucket, steam_bucket, watch)
                         await session.commit()
                         logger.info("Successfully processed watch", watch_id=watch_id)
                     except Exception as exc:  # pylint: disable=broad-except
